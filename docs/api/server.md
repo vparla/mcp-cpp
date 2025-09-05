@@ -68,6 +68,15 @@ Notes:
 - std::future<void> HandleInitialize(const Implementation& clientInfo,
                                     const ClientCapabilities& capabilities)
 
+Initialize semantics:
+
+- The server handles the JSON-RPC `initialize` request internally (see `Server::Impl::coStart()` in [src/mcp/Server.cpp](../../src/mcp/Server.cpp)).
+- After responding to `initialize`, the server sends:
+  - `notifications/initialized`
+  - Exactly one each of: `notifications/tools/list_changed`, `notifications/resources/list_changed`, `notifications/prompts/list_changed` (so clients can discover current state immediately).
+- The public `Server::HandleInitialize(...)` helper does not send list-changed notifications. It only records client capabilities for non-JSON-RPC wiring scenarios. In normal JSON-RPC flows you do not need to call it.
+- Tests assert exactly one list-changed notification per category after initialize. See [tests/test_initialize_notifications.cpp](../../tests/test_initialize_notifications.cpp).
+
 ## Tools
 - void RegisterTool(const std::string& name, ToolHandler handler)
 - void RegisterTool(const Tool& tool, ToolHandler handler)
