@@ -53,3 +53,28 @@ Detailed per-interface API documentation:
 - Client API: [docs/api/client.md](./api/client.md)
 - Server API: [docs/api/server.md](./api/server.md)
 - Transport API: [docs/api/transport.md](./api/transport.md)
+
+## Environment variables
+
+These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD](../BUILD+TEST.MD#demo-and-transport-options-env--factory-config) for examples.
+
+- `MCP_STDIOTRANSPORT_TIMEOUT_MS`: Default request timeout for `StdioTransport` (milliseconds). `0` disables.
+- `MCP_STDIO_CONFIG`: Pass stdio transport options as a `key=value` list (e.g., `timeout_ms`, `idle_read_timeout_ms`, `write_timeout_ms`, `write_queue_max_bytes`).
+- `MCP_KEEPALIVE_MS`: Enable periodic server keepalive notifications in the demo.
+- `DEMO_COLOR`: Set to `0` to disable colored output in demo scripts.
+
+## Examples
+
+- `examples/mcp_server` and `examples/mcp_client`: Demo server and client wired over stdio (used by `scripts/run_demo.sh`).
+- `examples/subscriptions_progress`: Demonstrates per-URI resource subscriptions and server progress notifications using `InMemoryTransport`.
+- `examples/stdio_smoke`: Minimal Windows-native smoke that exercises `StdioTransport` start/stop paths.
+
+## Coding style checklist
+
+Follow the project style rules in `task.md` and the Google C++ Style Guide:
+
+- Use C++20 and avoid busy loops; prefer async, futures/promises, and coroutines.
+- No third-party runtime deps; standard library and C-runtime only.
+- Every source file must include the SPDX header banner with filename and purpose.
+- Brace style and formatting per `task.md`; see Google C++ Style Guide for general rules: https://google.github.io/styleguide/cppguide.html#C++_Version
+- Add comprehensive GoogleTest coverage for new changes, including negative paths; register tests in `tests/CMakeLists.txt`.

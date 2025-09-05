@@ -1,4 +1,9 @@
+#==========================================================================================================
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Vinny Parla
+# File: examples/mcp_client/CMakeLists.txt
+# Purpose: MCP C++ SDK client example
+#==========================================================================================================
 
 cmake_minimum_required(VERSION 3.20)
 

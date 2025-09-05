@@ -1,0 +1,106 @@
+## ==================================================================================
+## SPDX-License-Identifier: MIT
+## Copyright (c) 2025 Vinny Parla
+## File: .github/workflows/ci.yml
+## Purpose: Cross-platform CI running Docker-first tests and Windows native smoke
+## ==================================================================================
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop, "release/*" ]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-tests-ubuntu:
+    name: Docker-first tests (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and run tests in Docker (Dockerfile.demo:test target)
+        run: |
+          docker buildx build \
+            -f Dockerfile.demo \
+            --target test \
+            --progress=plain \
+            --pull \
+            --load \
+            -t mcp-cpp-test .
+
+  docker-tests-macos:
+    name: Docker-first tests (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and run tests in Docker (Dockerfile.demo:test target)
+        run: |
+          docker buildx build \
+            -f Dockerfile.demo \
+            --target test \
+            --progress=plain \
+            --pull \
+            --load \
+            -t mcp-cpp-test .
+
+  docker-tests-windows:
+    name: Docker-first tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Show Docker version/info
+        run: |
+          docker version
+          docker info
+        shell: bash
+
+      - name: Build and run tests in Docker (Dockerfile.demo:test target)
+        run: |
+          docker buildx build \
+            -f Dockerfile.demo \
+            --target test \
+            --progress=plain \
+            --pull \
+            --load \
+            -t mcp-cpp-test .
+        shell: bash
+
+  windows-native-smoke:
+    name: Windows native stdio smoke
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure (MSVC, Release)
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DMCP_BUILD_EXAMPLES=ON -DMCP_BUILD_TESTS=OFF
+
+      - name: Build stdio_smoke
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --target stdio_smoke
+
+      - name: Run stdio_smoke
+        shell: pwsh
+        run: |
+          ./build/examples/stdio_smoke/Release/stdio_smoke.exe

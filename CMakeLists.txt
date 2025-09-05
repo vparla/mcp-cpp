@@ -1,3 +1,9 @@
+#==========================================================================================================
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Vinny Parla
+# File: CMakeLists.txt
+# Purpose: MCP C++ SDKS
+#==========================================================================================================
 cmake_minimum_required(VERSION 3.20)
 
 # Fail early if a lower standard is attempted
@@ -78,6 +84,8 @@ if(MCP_BUILD_EXAMPLES)
   add_subdirectory(examples/json_test)
   add_subdirectory(examples/mcp_client)
   add_subdirectory(examples/mcp_server)
+  add_subdirectory(examples/stdio_smoke)
+  add_subdirectory(examples/subscriptions_progress)
 endif()
 
 # Tests (to be implemented in a later step)

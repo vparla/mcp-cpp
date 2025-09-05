@@ -1,4 +1,10 @@
-# Tests CMake configuration
+#==========================================================================================================
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Vinny Parla
+# File: tests/CMakeLists.txt
+# Purpose: MCP C++ SDKS
+#==========================================================================================================
+
 
 cmake_minimum_required(VERSION 3.20)
 
