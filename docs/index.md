@@ -1,4 +1,11 @@
-<!-- SPDX-License-Identifier: MIT -->
+<!--
+==========================================================================================================
+SPDX-License-Identifier: MIT
+Copyright (c) 2025 Vinny Parla
+File: docs/index.md
+Purpose: Documentation index for the MCP C++ SDK
+==========================================================================================================
+-->
 # MCP C++ SDK Documentation
  
 This documentation will cover API reference, installation instructions, and usage examples for the MCP C++ SDK.
@@ -10,6 +17,8 @@ Contents:
 - Resource Subscriptions (Client API): see [README.md#resource-subscriptions](../README.md#resource-subscriptions)
  - Paging (Client API): see [README.md#paging](../README.md#paging)
  - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)
+- Keepalive & Logging (Server API): see [docs/api/server.md](./api/server.md#keepalive--heartbeat) and [docs/api/server.md](./api/server.md#logging-to-client)
+- Parity Matrix: see [docs/parity-matrix.md](./parity-matrix.md)
 - Examples
 - FAQ
  

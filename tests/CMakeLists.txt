@@ -47,5 +47,23 @@ gtest_discover_tests(mcp_tests)
 # Stdio transport integration test: run demo wiring server<->client over FIFOs
 add_test(
   NAME StdioDemo.Run
-  COMMAND /bin/bash -lc "MCP_STDIO_MODE=1 SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client ${CMAKE_SOURCE_DIR}/scripts/run_demo.sh"
+  COMMAND /bin/bash -lc "MCP_STDIO_MODE=1 SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${CMAKE_SOURCE_DIR}/scripts/run_demo.sh"
+)
+
+# Stdio hardening negative scenarios
+add_test(
+  NAME StdioHardening.IdleReadTimeout
+  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh idle"
+)
+add_test(
+  NAME StdioHardening.WriteQueueOverflow
+  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh overflow"
+)
+add_test(
+  NAME StdioHardening.WriteTimeout
+  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh writetimeout"
+)
+add_test(
+  NAME StdioHardening.BadContentLength
+  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh badlength"
 )

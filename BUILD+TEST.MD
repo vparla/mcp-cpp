@@ -1,4 +1,11 @@
-<!-- SPDX-License-Identifier: MIT -->
+<!--
+==========================================================================================================
+SPDX-License-Identifier: MIT
+Copyright (c) 2025 Vinny Parla
+File: BUILD+TEST.MD
+Purpose: Build and test documentation (Docker-first workflow, options, and tips)
+==========================================================================================================
+-->
 
 # Build and Test (Docker-first)
 
@@ -44,6 +51,12 @@ Tips:
 - Add new tests by updating `tests/CMakeLists.txt` and adding `TEST(...)` cases.
 - Note: when writing code that directly uses the in-memory transport, include `mcp/InMemoryTransport.hpp`. For StdioTransport, include `mcp/StdioTransport.hpp`.
 
+### Terminal output and colors
+
+- The Docker test stage runs `ctest -VV`, so GoogleTest logs and any shell script output are printed to your terminal.
+- The demo script [`scripts/run_demo.sh`](./scripts/run_demo.sh) prints `[demo] ...` lines to stderr. You can disable color with `DEMO_COLOR=0`.
+- The stdio hardening tests [`scripts/test_stdio_hardening.sh`](./scripts/test_stdio_hardening.sh) print concise `[OK]/[FAIL]` status lines.
+
 ### Test cases and what they cover
 
 We write tests with GoogleTest, and CTest (from CMake) discovers and runs them inside the `--target test` Docker image (see `tests/CMakeLists.txt` and `Dockerfile.demo`). The list below summarizes each test; the sources live under `tests/`:
@@ -64,6 +77,11 @@ We write tests with GoogleTest, and CTest (from CMake) discovers and runs them i
 - __ResourceSubscriptions.FiltersUpdatesByUri__ — server filters resources/updated notifications by subscribed URIs. Source: [tests/test_resource_subscriptions.cpp](c:/Work/mcp-cpp/tests/test_resource_subscriptions.cpp)
 - __ClientSubscribeUri.SubAndFilterByUri__ — client API per-URI subscription and filtered notifications. Source: [tests/test_client_subscribe_uri.cpp](c:/Work/mcp-cpp/tests/test_client_subscribe_uri.cpp)
 - __StdioDemo.Run__ — demo integration using stdio transport; builds and runs the example server and client, wiring them via FIFOs. Configurable via `MCP_STDIOTRANSPORT_TIMEOUT_MS`. Defined in [tests/CMakeLists.txt](c:/Work/mcp-cpp/tests/CMakeLists.txt) and script [scripts/run_demo.sh](c:/Work/mcp-cpp/scripts/run_demo.sh)
+
+- __StdioHardening.IdleReadTimeout__ — verifies idle read timeout closes transport when no bytes are received for the configured duration. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
+- __StdioHardening.WriteQueueOverflow__ — small write queue with frequent keepalives triggers overflow; transport emits error and closes. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
+- __StdioHardening.WriteTimeout__ — non-blocking writes stall with no reader; write timeout closes transport. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
+- __StdioHardening.BadContentLength__ — oversized Content-Length header is rejected; server terminates. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
 
 Run the full suite with no cache (WSL):
 
@@ -94,6 +112,12 @@ wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src &&
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R PromptsGet.ReturnsActualMessages --output-on-failure'"
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ServerToolsInputSchema.ListIncludesProvidedSchema --output-on-failure'"
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R StdioDemo.Run --output-on-failure'"
+```
+
+Run only stdio hardening tests (WSL):
+
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R StdioHardening --output-on-failure'"
 ```
 
 ### Configurable request timeout for StdioTransport
@@ -143,6 +167,28 @@ wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo -e MCP_STDIOTRANS
 
 Troubleshooting:
 - If the container name is already in use: `docker rm -f mcp-cpp-demo` and re-run.
+
+### Demo and transport options (env + factory config)
+
+- To pass stdio transport options to the demo server, set `MCP_STDIO_CONFIG`:
+  - Recognized keys: `timeout_ms`, `idle_read_timeout_ms`, `write_timeout_ms`, `write_queue_max_bytes`.
+  - Example (Linux/macOS):
+    ```bash
+    docker run --rm --name mcp-cpp-demo \
+      -e MCP_STDIO_CONFIG="timeout_ms=30000;idle_read_timeout_ms=200" \
+      mcp-cpp-demo
+    ```
+  - Example (WSL PowerShell):
+    ```powershell
+    wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo -e MCP_STDIO_CONFIG='timeout_ms=30000;idle_read_timeout_ms=200' mcp-cpp-demo"
+    ```
+
+- To enable periodic keepalive notifications (useful for exercising write-side pressure):
+  - `MCP_KEEPALIVE_MS=<interval>`
+  - Example: `-e MCP_KEEPALIVE_MS=1` to send frequent keepalives.
+
+- Demo color control:
+  - `DEMO_COLOR=0` disables colored `[demo]` lines in `run_demo.sh`.
 
 ## Export build artifacts (headers + static lib)
 

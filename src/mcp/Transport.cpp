@@ -42,6 +42,7 @@
 #include "mcp/Transport.h"
 #include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
+#include "env/EnvVars.h"
 
 
 namespace mcp {
@@ -82,13 +83,12 @@ public:
         std::uniform_int_distribution<> dis(1000, 9999);
         sessionId = "stdio-" + std::to_string(dis(gen));
         // Env override for timeout
-        const char* env = ::getenv("MCP_STDIOTRANSPORT_TIMEOUT_MS");
-        if (env && *env) {
-            char* endp = nullptr;
-            unsigned long long v = ::strtoull(env, &endp, 10);
-            if (endp && endp != env) {
+        std::string env = GetEnvOrDefault("MCP_STDIOTRANSPORT_TIMEOUT_MS", "");
+        if (!env.empty()) {
+            try {
+                unsigned long long v = std::stoull(env);
                 requestTimeout = std::chrono::milliseconds(static_cast<uint64_t>(v));
-            }
+            } catch (...) { /* ignore malformed */ }
         }
 
 #ifdef _WIN32

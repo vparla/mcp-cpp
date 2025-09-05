@@ -35,6 +35,18 @@ public:
     // Optional: configure request timeout (milliseconds). Defaults to 30000 ms.
     void SetRequestTimeoutMs(uint64_t timeoutMs);
 
+    // Optional: configure idle read timeout (milliseconds). If > 0, transport will emit an error
+    // and close when no bytes are received for the given duration.
+    void SetIdleReadTimeoutMs(uint64_t timeoutMs);
+
+    // Optional: configure maximum bytes allowed in the write queue for backpressure.
+    // When exceeded, transport will emit an error and close.
+    void SetWriteQueueMaxBytes(std::size_t maxBytes);
+
+    // Optional: configure per-frame write timeout (milliseconds).
+    // When a frame cannot be fully written within this time, transport emits an error and closes.
+    void SetWriteTimeoutMs(uint64_t timeoutMs);
+
 private:
     class Impl;
     std::unique_ptr<Impl> pImpl;

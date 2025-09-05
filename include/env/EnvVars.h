@@ -12,21 +12,5 @@ inline std::string GetEnvOrDefault(const char* name, const std::string& defaultV
     if (name == nullptr || *name == '\0') {
         return defaultValue;
     }
-#ifdef _WIN32
-    char* val = nullptr;
-    size_t len = 0;
-    ::_dupenv_s(&val, &len, name);
-    if (val == nullptr) {
-        return defaultValue;
-    }
-    std::string result = val;
-    ::free(val);
-    return result;
-#else
-    const char* val = ::getenv(name);
-    if (val == nullptr) {
-        return defaultValue;
-    }
-    return std::string(val);
-#endif
+    return std::getenv(name) ? std::string(std::getenv(name)) : defaultValue;
 }

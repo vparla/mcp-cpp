@@ -26,6 +26,7 @@
 #include <thread>
 #include <atomic>
 #include <queue>
+#include <deque>
 #include <mutex>
 #include <condition_variable>
 #include <random>
@@ -44,6 +45,7 @@
 #include "mcp/StdioTransport.hpp"
 #include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
+#include "env/EnvVars.h"
 
 namespace mcp {
 
@@ -51,14 +53,18 @@ class StdioTransport::Impl {
 public:
     std::atomic<bool> connected{false};
     std::atomic<bool> readerExited{false};
+    std::atomic<bool> writerExited{false};
     std::string sessionId;
     ITransport::NotificationHandler notificationHandler;
     ITransport::RequestHandler requestHandler;
     ITransport::ErrorHandler errorHandler;
     std::thread readerThread;
     std::thread timeoutThread;
+    std::thread writerThread;
     std::mutex requestMutex;
-    std::mutex outMutex; // serialize writes to stdout
+    std::mutex outMutex; // legacy serialize writes to stdout (unused by writer thread)
+    std::mutex writeMutex; // protects writeQueue and queuedBytes
+    std::condition_variable cvWrite;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> requestDeadlines;
     std::atomic<int> requestCounter{0};
@@ -75,6 +81,14 @@ public:
 
     static constexpr std::size_t MaxContentLength = 1024 * 1024; // 1 MiB cap
     std::chrono::milliseconds requestTimeout{30000}; // default 30s (configurable)
+    std::chrono::milliseconds idleReadTimeout{0}; // 0 = disabled
+    std::chrono::steady_clock::time_point lastReadTs{std::chrono::steady_clock::now()};
+
+    // Write queue/backpressure
+    std::deque<std::string> writeQueue;
+    std::size_t queuedBytes{0};
+    std::size_t writeQueueMaxBytes{2 * 1024 * 1024}; // 2 MiB default cap
+    std::chrono::milliseconds writeTimeout{0}; // 0 = disabled
 
     Impl() {
         // Generate session ID
@@ -83,13 +97,12 @@ public:
         std::uniform_int_distribution<> dis(1000, 9999);
         sessionId = "stdio-" + std::to_string(dis(gen));
         // Env override for timeout
-        const char* env = ::getenv("MCP_STDIOTRANSPORT_TIMEOUT_MS");
-        if (env && *env) {
-            char* endp = nullptr;
-            unsigned long long v = ::strtoull(env, &endp, 10);
-            if (endp && endp != env) {
+        std::string env = GetEnvOrDefault("MCP_STDIOTRANSPORT_TIMEOUT_MS", "");
+        if (!env.empty()) {
+            try {
+                unsigned long long v = std::stoull(env);
                 requestTimeout = std::chrono::milliseconds(static_cast<uint64_t>(v));
-            }
+            } catch (...) { /* ignore malformed value */ }
         }
 
 #ifdef _WIN32
@@ -143,9 +156,57 @@ public:
 #endif
     }
 
-    void writeFrame(std::ostream& out, const std::string& payload) {
-        out << "Content-Length: " << payload.size() << "\r\n\r\n" << payload;
-        out.flush();
+    static std::string makeFrame(const std::string& payload) {
+        std::string header = "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n";
+        std::string frame; frame.reserve(header.size() + payload.size());
+        frame.append(header);
+        frame.append(payload);
+        return frame;
+    }
+
+    bool enqueueFrame(const std::string& payload) {
+        std::string frame = makeFrame(payload);
+        {
+            std::unique_lock<std::mutex> lk(writeMutex);
+            if (queuedBytes + frame.size() > writeQueueMaxBytes) {
+                LOG_ERROR("StdioTransport: write queue overflow (queued={} add={} max={})", queuedBytes, frame.size(), writeQueueMaxBytes);
+                if (errorHandler) errorHandler("StdioTransport: write queue overflow");
+                connected = false;
+#ifdef _WIN32
+                if (stopEvent) { ::SetEvent(stopEvent); }
+#else
+#  ifdef __linux__
+                if (wakeEventFd >= 0) {
+                    uint64_t one = 1;
+                    ssize_t wr;
+                    do {
+                        wr = ::write(wakeEventFd, &one, sizeof(one));
+                    } while (wr < 0 && errno == EINTR);
+                    if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        LOG_WARN("StdioTransport: eventfd write failed (errno={} msg={})", errno, ::strerror(errno));
+                    }
+                }
+#  else
+                if (wakePipe[1] >= 0) {
+                    char b='x';
+                    ssize_t wr;
+                    do { 
+                        wr = ::write(wakePipe[1], &b, 1);
+                    } while (wr < 0 && errno == EINTR);
+                    if (wr < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        LOG_WARN("StdioTransport: wake pipe write failed (errno={} msg={})", errno, ::strerror(errno));
+                    }
+                }
+#  endif
+#endif
+                cvWrite.notify_all();
+                return false;
+            }
+            queuedBytes += frame.size();
+            writeQueue.emplace_back(std::move(frame));
+        }
+        cvWrite.notify_one();
+        return true;
     }
 
     std::optional<std::string> readFrame(std::istream& in) {
@@ -215,6 +276,7 @@ public:
         readerThread = std::thread([this]() {
             std::string buffer;
             constexpr int waitTimeoutMs = 100;
+            lastReadTs = std::chrono::steady_clock::now();
 
             auto tryExtractFrame = [&](std::string& buf) -> std::optional<std::string> {
                 const std::string sep = "\r\n\r\n";
@@ -485,15 +547,102 @@ public:
 #endif
 
                 if (hadData) {
+                    lastReadTs = std::chrono::steady_clock::now();
                     while (connected) {
                         auto framed = tryExtractFrame(buffer);
                         if (!framed.has_value()) break;
                         processMessage(framed.value());
                     }
                 }
+
+                // Idle read timeout check
+                if (idleReadTimeout.count() > 0) {
+                    auto now = std::chrono::steady_clock::now();
+                    if (now - lastReadTs >= idleReadTimeout) {
+                        LOG_ERROR("StdioTransport: idle read timeout ({} ms)", static_cast<long long>(idleReadTimeout.count()));
+                        if (errorHandler) errorHandler("StdioTransport: idle read timeout");
+                        break;
+                    }
+                }
             }
             connected = false;
             readerExited.store(true);
+        });
+    }
+
+    void startWriter() {
+        writerThread = std::thread([this]() {
+            writerExited.store(false);
+#ifndef _WIN32
+            int fd = STDOUT_FILENO;
+            int flags = ::fcntl(fd, F_GETFL, 0);
+            if (flags >= 0) { (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK); }
+#endif
+            while (connected) {
+                std::string frame;
+                {
+                    std::unique_lock<std::mutex> lk(writeMutex);
+                    cvWrite.wait_for(lk, std::chrono::milliseconds(50), [&]{ return !connected || !writeQueue.empty(); });
+                    if (!connected && writeQueue.empty()) break;
+                    if (!writeQueue.empty()) {
+                        frame = std::move(writeQueue.front());
+                        writeQueue.pop_front();
+                    }
+                }
+                if (frame.empty()) continue;
+
+                std::size_t total = 0;
+                auto start = std::chrono::steady_clock::now();
+                while (connected && total < frame.size()) {
+#ifdef _WIN32
+                    DWORD written = 0;
+                    ::HANDLE hOut = ::GetStdHandle(STD_OUTPUT_HANDLE);
+                    if (!hOut || hOut == INVALID_HANDLE_VALUE) {
+                        if (errorHandler) errorHandler("StdioTransport: invalid STDOUT handle");
+                        connected = false; break;
+                    }
+                    BOOL ok = ::WriteFile(hOut, frame.data() + total, static_cast<DWORD>(frame.size() - total), &written, NULL);
+                    if (!ok) {
+                        DWORD err = ::GetLastError();
+                        LOG_ERROR("StdioTransport: WriteFile failed (err={})", static_cast<unsigned long>(err));
+                        if (errorHandler) errorHandler("StdioTransport: write failed");
+                        connected = false; break;
+                    }
+                    if (written == 0) {
+                        // Avoid tight loop
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                    total += static_cast<std::size_t>(written);
+#else
+                    ssize_t w = ::write(STDOUT_FILENO, frame.data() + total, frame.size() - total);
+                    if (w > 0) {
+                        total += static_cast<std::size_t>(w);
+                    } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                        // Check write timeout
+                        if (writeTimeout.count() > 0 && (std::chrono::steady_clock::now() - start) >= writeTimeout) {
+                            LOG_ERROR("StdioTransport: write timeout ({} ms)", static_cast<long long>(writeTimeout.count()));
+                            if (errorHandler) errorHandler("StdioTransport: write timeout");
+                            connected = false; break;
+                        }
+                        // Back off a bit
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    } else if (w < 0 && errno == EINTR) {
+                        continue;
+                    } else if (w == 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    } else {
+                        LOG_ERROR("StdioTransport: write error (errno={} msg={})", errno, ::strerror(errno));
+                        if (errorHandler) errorHandler("StdioTransport: write error");
+                        connected = false; break;
+                    }
+#endif
+                }
+                {
+                    std::lock_guard<std::mutex> lk(writeMutex);
+                    if (queuedBytes >= frame.size()) queuedBytes -= frame.size(); else queuedBytes = 0;
+                }
+            }
+            writerExited.store(true);
         });
     }
 
@@ -542,20 +691,14 @@ public:
                             resp->id = req.id;
                         }
                         const std::string payload = resp->Serialize();
-                        {
-                            std::lock_guard<std::mutex> lock(outMutex);
-                            writeFrame(std::cout, payload);
-                        }
+                        (void)enqueueFrame(payload);
                     } catch (const std::exception& e) {
                         LOG_ERROR("Request handler exception: {}", e.what());
                         auto resp = std::make_unique<JSONRPCResponse>();
                         resp->id = req.id;
                         resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
                         std::string payload = resp->Serialize();
-                        {
-                            std::lock_guard<std::mutex> lock(outMutex);
-                            writeFrame(std::cout, payload);
-                        }
+                        (void)enqueueFrame(payload);
                     }
                 }).detach();
                 return;
@@ -603,6 +746,7 @@ std::future<void> StdioTransport::Start() {
     LOG_INFO("Starting StdioTransport");
     pImpl->connected = true;
     pImpl->startReader();
+    pImpl->startWriter();
     pImpl->startTimeouts();
     std::promise<void> promise; promise.set_value(); return promise.get_future();
 }
@@ -658,6 +802,17 @@ std::future<void> StdioTransport::Close() {
         }
         if (pImpl->readerExited.load()) { pImpl->readerThread.join(); }
         else { LOG_WARN("StdioTransport: reader thread appears blocked; detaching to avoid hang"); pImpl->readerThread.detach(); }
+    }
+    if (pImpl->writerThread.joinable()) {
+        // Wake writer
+        pImpl->cvWrite.notify_all();
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        while (!pImpl->writerExited.load()) {
+            if (std::chrono::steady_clock::now() >= deadline) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (pImpl->writerExited.load()) { pImpl->writerThread.join(); }
+        else { LOG_WARN("StdioTransport: writer thread appears blocked; detaching to avoid hang"); pImpl->writerThread.detach(); }
     }
     if (pImpl->timeoutThread.joinable()) { pImpl->timeoutThread.join(); }
 
@@ -716,10 +871,7 @@ std::future<std::unique_ptr<JSONRPCResponse>> StdioTransport::SendRequest(
 
     std::string serialized = request->Serialize();
     LOG_DEBUG("Sending framed request ({} bytes)", serialized.size());
-    {
-        std::lock_guard<std::mutex> lock(pImpl->outMutex);
-        pImpl->writeFrame(std::cout, serialized);
-    }
+    (void)pImpl->enqueueFrame(serialized);
     return future;
 }
 
@@ -732,10 +884,7 @@ std::future<void> StdioTransport::SendNotification(
     }
     std::string serialized = notification->Serialize();
     LOG_DEBUG("Sending framed notification ({} bytes)", serialized.size());
-    {
-        std::lock_guard<std::mutex> lock(pImpl->outMutex);
-        pImpl->writeFrame(std::cout, serialized);
-    }
+    (void)pImpl->enqueueFrame(serialized);
     std::promise<void> promise; promise.set_value(); return promise.get_future();
 }
 
@@ -749,17 +898,52 @@ void StdioTransport::SetRequestTimeoutMs(uint64_t timeoutMs) {
     else { pImpl->requestTimeout = std::chrono::milliseconds(timeoutMs); }
 }
 
+void StdioTransport::SetIdleReadTimeoutMs(uint64_t timeoutMs) {
+    FUNC_SCOPE();
+    pImpl->idleReadTimeout = (timeoutMs == 0) ? std::chrono::milliseconds(0) : std::chrono::milliseconds(timeoutMs);
+}
+
+void StdioTransport::SetWriteQueueMaxBytes(std::size_t maxBytes) {
+    FUNC_SCOPE();
+    if (maxBytes == 0) { maxBytes = 1; }
+    pImpl->writeQueueMaxBytes = maxBytes;
+}
+
+void StdioTransport::SetWriteTimeoutMs(uint64_t timeoutMs) {
+    FUNC_SCOPE();
+    pImpl->writeTimeout = (timeoutMs == 0) ? std::chrono::milliseconds(0) : std::chrono::milliseconds(timeoutMs);
+}
+
 std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::string& config) {
     auto t = std::make_unique<StdioTransport>();
-    auto pos = config.find("timeout_ms=");
-    if (pos != std::string::npos) {
-        pos += std::string("timeout_ms=").size();
-        std::size_t end = pos;
-        while (end < config.size() && config[end] >= '0' && config[end] <= '9') ++end;
-        if (end > pos) {
-            const std::string num = config.substr(pos, end - pos);
-            try { uint64_t ms = static_cast<uint64_t>(std::stoull(num)); t->SetRequestTimeoutMs(ms); }
-            catch (...) { /* ignore malformed value */ }
+    // Parse key=value pairs separated by ';' or whitespace
+    auto parseUint = [](const std::string& s, uint64_t& out) -> bool {
+        try { out = static_cast<uint64_t>(std::stoull(s)); return true; } catch (...) { return false; }
+    };
+    auto parseSize = [](const std::string& s, std::size_t& out) -> bool {
+        try { unsigned long long v = std::stoull(s); out = static_cast<std::size_t>(v); return true; } catch (...) { return false; }
+    };
+    std::string token;
+    for (std::size_t i = 0; i < config.size();) {
+        // Skip separators and spaces
+        while (i < config.size() && (config[i] == ';' || config[i] == ' ' || config[i] == '\t')) ++i;
+        if (i >= config.size()) break;
+        std::size_t start = i;
+        while (i < config.size() && config[i] != ';' && config[i] != ' ' && config[i] != '\t') ++i;
+        token = config.substr(start, i - start);
+        auto eq = token.find('=');
+        if (eq != std::string::npos) {
+            auto key = token.substr(0, eq);
+            auto val = token.substr(eq + 1);
+            if (key == "timeout_ms") {
+                uint64_t v; if (parseUint(val, v)) t->SetRequestTimeoutMs(v);
+            } else if (key == "idle_read_timeout_ms") {
+                uint64_t v; if (parseUint(val, v)) t->SetIdleReadTimeoutMs(v);
+            } else if (key == "write_timeout_ms") {
+                uint64_t v; if (parseUint(val, v)) t->SetWriteTimeoutMs(v);
+            } else if (key == "write_queue_max_bytes") {
+                std::size_t v; if (parseSize(val, v)) t->SetWriteQueueMaxBytes(v);
+            }
         }
     }
     return t;

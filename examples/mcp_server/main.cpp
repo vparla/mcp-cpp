@@ -14,6 +14,7 @@
 #include <thread>
 #include <future>
 #include <stop_token>
+#include "env/EnvVars.h"
 
 using namespace mcp;
 
@@ -49,9 +50,27 @@ int main() {
         try { stopped.set_value(); } catch (...) {}
     });
 
-    // Start server on stdio via factory
+    // Optional: server keepalive interval configured by environment
+    {
+        std::string keepalive = GetEnvOrDefault("MCP_KEEPALIVE_MS", "");
+        if (!keepalive.empty()) {
+            try {
+                int ms = std::stoi(keepalive);
+                if (ms > 0) {
+                    server->SetKeepaliveIntervalMs(ms);
+                    LOG_INFO("Enabled keepalive: {} ms", ms);
+                }
+            } catch (...) {}
+        }
+    }
+
+    // Start server on stdio via factory with optional config from env
     StdioTransportFactory tFactory;
-    auto transport = tFactory.CreateTransport("timeout_ms=30000");
+    std::string cfg = GetEnvOrDefault("MCP_STDIO_CONFIG", "timeout_ms=30000");
+    if (cfg != "timeout_ms=30000") {
+        LOG_INFO("Using MCP_STDIO_CONFIG: {}", cfg);
+    }
+    auto transport = tFactory.CreateTransport(cfg);
     server->Start(std::move(transport)).get();
 
     // Wait for transport termination (e.g., stdin EOF)

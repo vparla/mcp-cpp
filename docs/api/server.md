@@ -102,10 +102,47 @@ Notes:
 - void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs)
   - Enable periodic `notifications/keepalive` when > 0; disables when not set or <= 0.
 
+Details:
+
+- When enabled, the server advertises an experimental capability in initialize response under `capabilities.experimental.keepalive` with fields:
+  - `enabled: true`
+  - `intervalMs: number` (the configured interval)
+  - `failureThreshold: number` (consecutive send failures before transport is closed)
+- If keepalive is disabled (`intervalMs` unset or <= 0), the advertisement is removed.
+- Consecutive failures to send keepalive notifications are tracked; once the threshold is reached the server will close the transport and invoke the error handler.
+
+Example:
+
+```cpp
+// Enable 100ms cadence
+server.SetKeepaliveIntervalMs(100);
+
+// Disable later
+server.SetKeepaliveIntervalMs(std::optional<int>(0));
+```
+
 ## Logging to client
 - std::future<void> LogToClient(const std::string& level, const std::string& message,
                                const std::optional<JSONValue>& data = std::nullopt)
   - Sends `notifications/log` with level/message/data; suppressed if below client-advertised log level (`capabilities.experimental.logLevel`).
+
+Details:
+
+- A client may advertise a minimum log level via `capabilities.experimental.logLevel` during initialize. The server will suppress log notifications below this threshold.
+- Supported levels include `DEBUG`, `INFO`, `WARN`/`WARNING` (aliases), `ERROR`, `FATAL`. Unknown levels map conservatively and may be suppressed when the client minimum is higher.
+- If the `data` parameter is not provided, the `data` field is omitted in the notification payload.
+
+Example:
+
+```cpp
+// Client sets experimental.logLevel = "WARN". The server will suppress INFO/DEBUG.
+server.LogToClient("INFO", "this-will-be-suppressed", std::nullopt);
+server.LogToClient("ERROR", "this-will-be-delivered", std::nullopt);
+
+// Structured payload
+JSONValue::Object obj; obj["op"] = std::make_shared<JSONValue>(std::string("index"));
+server.LogToClient("WARN", "slow-path", JSONValue{obj}).get();
+```
 
 ## Notifications and messaging
 - std::future<void> NotifyResourcesListChanged()
