@@ -447,7 +447,7 @@ public:
                         (void)::epoll_ctl(ep, EPOLL_CTL_ADD, wfd, &evWake);
                     }
                     epoll_event events[2];
-                    const int eventsCapacity = static_cast<int>(sizeof(events) / sizeof(events[0]));
+                    const size_t eventsCapacity = sizeof(events) / sizeof(events[0]);
                     int rc = ::epoll_wait(ep, events, eventsCapacity, waitTimeoutMs);
                     ::close(ep);
                     if (rc < 0) {
@@ -461,8 +461,8 @@ public:
                     if (rc == 0) {
                     } else {
                         bool woke = false;
-                        const int limit = (rc < eventsCapacity) ? rc : eventsCapacity;
-                        for (int i = 0; i < limit; ++i) {
+                        const size_t limit = (rc < eventsCapacity) ? rc : eventsCapacity;
+                        for (size_t i = 0; i < limit; ++i) {
                             auto &ev = events[i];
                             if (ev.data.fd == fd) {
                                 if (ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
