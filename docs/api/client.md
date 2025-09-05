@@ -1,0 +1,81 @@
+<!--
+==========================================================================================================
+SPDX-License-Identifier: MIT
+Copyright (c) 2025 Vinny Parla
+File: docs/api/client.md
+Purpose: Client API reference (IClient / Client)
+==========================================================================================================
+-->
+# Client API (IClient / Client)
+
+Header: [include/mcp/Client.h](../../include/mcp/Client.h)
+
+This page summarizes the public client APIs with signatures and brief descriptions. See README for conceptual guides.
+
+## Connection management
+- std::future<void> Connect(std::unique_ptr<ITransport> transport)
+  - Start the transport and wire client handlers.
+- std::future<void> Disconnect()
+  - Close the active transport.
+- bool IsConnected() const
+  - Returns true if connected.
+
+## Initialization
+- std::future<ServerCapabilities> Initialize(const Implementation& clientInfo,
+                                            const ClientCapabilities& capabilities)
+  - Perform MCP initialize; resolves to server capabilities.
+
+## Tools
+- std::future<std::vector<Tool>> ListTools()
+  - Non-paged helper for listing tools.
+- std::future<ToolsListResult> ListToolsPaged(const std::optional<std::string>& cursor,
+                                             const std::optional<int>& limit)
+  - Paged listing for tools.
+- std::future<JSONValue> CallTool(const std::string& name, const JSONValue& arguments)
+  - Invoke a tool; result shape mirrors tools/call.
+
+## Resources
+- std::future<std::vector<Resource>> ListResources()
+  - Non-paged helper for listing resources.
+- std::future<ResourcesListResult> ListResourcesPaged(const std::optional<std::string>& cursor,
+                                                     const std::optional<int>& limit)
+  - Paged listing for resources.
+- std::future<JSONValue> ReadResource(const std::string& uri)
+  - Read resource contents; result contains a contents array.
+
+## Resource templates
+- std::future<std::vector<ResourceTemplate>> ListResourceTemplates()
+- std::future<ResourceTemplatesListResult> ListResourceTemplatesPaged(const std::optional<std::string>& cursor,
+                                                                     const std::optional<int>& limit)
+
+## Resource subscriptions
+- std::future<void> SubscribeResources()
+  - Subscribe globally to resource updates.
+- std::future<void> SubscribeResources(const std::optional<std::string>& uri)
+  - Subscribe to updates for a single URI if provided.
+- std::future<void> UnsubscribeResources()
+- std::future<void> UnsubscribeResources(const std::optional<std::string>& uri)
+
+## Prompts
+- std::future<std::vector<Prompt>> ListPrompts()
+- std::future<PromptsListResult> ListPromptsPaged(const std::optional<std::string>& cursor,
+                                                 const std::optional<int>& limit)
+- std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments)
+
+## Sampling (server → client)
+- using SamplingHandler = std::function<std::future<JSONValue>(
+    const JSONValue& messages,
+    const JSONValue& modelPreferences,
+    const JSONValue& systemPrompt,
+    const JSONValue& includeContext)>
+- void SetSamplingHandler(SamplingHandler handler)
+  - Register a handler for server-initiated sampling/createMessage.
+
+## Notifications, progress, and errors
+- using NotificationHandler = std::function<void(const std::string& method, const JSONValue& params)>;
+- void SetNotificationHandler(const std::string& method, NotificationHandler handler)
+- void RemoveNotificationHandler(const std::string& method)
+- using ProgressHandler = std::function<void(const std::string& token, double progress, const std::string& message)>;
+- void SetProgressHandler(ProgressHandler handler)
+- using ErrorHandler = std::function<void(const std::string& error)>;
+- void SetErrorHandler(ErrorHandler handler)

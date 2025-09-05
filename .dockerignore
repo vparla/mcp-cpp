@@ -1,0 +1,14 @@
+# Reduce Docker build context
+.git
+.gitignore
+build
+out
+**/.vs
+**/.vscode
+**/.idea
+**/*.user
+**/*.vcxproj*
+**/*.sln
+**/__pycache__
+**/*.log
+**/.cache

@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1.7
+
+# SPDX-License-Identifier: MIT
+# Demo Dockerfile: builds the SDK and runs client+server together without touching the main build Dockerfile
+
+# 1) Build stage
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS build
+ARG TARGETPLATFORM
+ARG TARGETARCH
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential \
+      cmake \
+      ninja-build \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Configure and build (Release + tests)
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMCP_BUILD_TESTS=ON \
+ && cmake --build build -j
+
+# 1b) Test stage: run unit tests inside the build environment
+FROM build AS test
+ARG MCP_STDIOTRANSPORT_TIMEOUT_MS
+ENV MCP_STDIOTRANSPORT_TIMEOUT_MS=${MCP_STDIOTRANSPORT_TIMEOUT_MS}
+ENV GTEST_COLOR=yes
+WORKDIR /src
+RUN ctest --test-dir build -VV --progress
+
+# 2) Demo runtime stage
+FROM ubuntu:24.04 AS demo
+# bash and coreutils are available by default; ensure minimal tools
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      bash \
+      coreutils \
+ && rm -rf /var/lib/apt/lists/*
+
+# Route logs to stderr to avoid corrupting stdio JSON-RPC frames
+ENV MCP_STDIO_MODE=1
+
+# Binaries
+COPY --from=build /src/build/examples/mcp_server/mcp_server /usr/local/bin/mcp_server
+COPY --from=build /src/build/examples/mcp_client/mcp_client /usr/local/bin/mcp_client
+
+# Runner script
+COPY scripts/run_demo.sh /usr/local/bin/run_demo.sh
+RUN chmod +x /usr/local/bin/run_demo.sh
+
+# Default entrypoint runs both client and server wired over stdio via FIFOs
+ENTRYPOINT ["/usr/local/bin/run_demo.sh"]

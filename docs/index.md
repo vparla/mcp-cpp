@@ -1,0 +1,46 @@
+<!-- SPDX-License-Identifier: MIT -->
+# MCP C++ SDK Documentation
+ 
+This documentation will cover API reference, installation instructions, and usage examples for the MCP C++ SDK.
+ 
+Contents:
+- Getting Started (Docker-first)
+- Build & Test: see [BUILD+TEST.MD](../BUILD+TEST.MD)
+- API Overview
+- Resource Subscriptions (Client API): see [README.md#resource-subscriptions](../README.md#resource-subscriptions)
+ - Paging (Client API): see [README.md#paging](../README.md#paging)
+ - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)
+- Examples
+- FAQ
+ 
+## Getting Started
+ 
+For step-by-step build and test instructions (Docker/WSL2), see [BUILD+TEST.MD](../BUILD+TEST.MD).
+ 
+Key commands:
+ 
+```bash
+# Docker tests
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+```
+ 
+Docker demo:
+ 
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
+wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
+``` 
+
+## API Overview
+
+For details on commonly used APIs, see the dedicated sections in the root README:
+- Subscriptions (per-URI): [README.md#resource-subscriptions](../README.md#resource-subscriptions)
+- Paging (tools/resources/prompts/templates): [README.md#paging](../README.md#paging)
+- Sampling handler (server): [README.md#server-side-sampling](../README.md#server-side-sampling)
+
+## API Reference
+
+Detailed per-interface API documentation:
+- Client API: [docs/api/client.md](./api/client.md)
+- Server API: [docs/api/server.md](./api/server.md)
+- Transport API: [docs/api/transport.md](./api/transport.md)

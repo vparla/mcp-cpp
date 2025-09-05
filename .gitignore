@@ -1,0 +1,106 @@
+# C/C++ build artifacts
+# ----------------------
+# Compiled object files / libs / binaries
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+*.exe
+*.exp
+*.pdb
+*.ilk
+
+# Precompiled headers
+*.gch
+*.pch
+*.ipch
+
+# Debug / release directories (Visual Studio)
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+Win32/
+x64/
+x86/
+ARM/
+ARM64/
+[Oo]bj/
+
+# CMake/Ninja generated files
+# ---------------------------
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+_make/
+Makefile
+build/
+build-*/
+build*/
+cmake-build-*/
+build.ninja
+.ninja_deps
+.ninja_log
+CMakeUserPresets.json
+compile_commands.json
+install_manifest.txt
+
+# Project artifacts exported locally
+# ----------------------------------
+# Docker artifacts stage output
+out/
+# Common top-level bins/libs if created
+bin/
+lib/
+
+# Logs and temporary files
+# ------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+*~
+.swp
+.swo
+.cache/
+
+# OS-specific
+# -----------
+.DS_Store
+Thumbs.db
+
+# IDE/editor metadata
+# -------------------
+.vscode/
+.idea/
+*.user
+*.vcxproj.user
+*.suo
+*.ncb
+*.sdf
+*.opensdf
+*.opendb
+
+# Crash/core dumps
+# ----------------
+core
+*.core
+
+# Coverage
+# --------
+*.gcda
+*.gcno
+*.gcov
+coverage/
+
+# Files to Ignore
+build-issues.md
+#task.md
+/MCP\ SDK.code-workspace
