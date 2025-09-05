@@ -448,7 +448,7 @@ public:
                     }
                     epoll_event events[2];
                     const size_t eventsCapacity = sizeof(events) / sizeof(events[0]);
-                    int rc = ::epoll_wait(ep, events, eventsCapacity, waitTimeoutMs);
+                    int rc = ::epoll_wait(ep, events, static_cast<int>(eventsCapacity), waitTimeoutMs);
                     ::close(ep);
                     if (rc < 0) {
                         if (errno == EINTR) {
@@ -461,7 +461,7 @@ public:
                     if (rc == 0) {
                     } else {
                         bool woke = false;
-                        const size_t limit = (rc < eventsCapacity) ? rc : eventsCapacity;
+                        const size_t limit = (static_cast<size_t>(rc) < eventsCapacity) ? static_cast<size_t>(rc) : eventsCapacity;
                         for (size_t i = 0; i < limit; ++i) {
                             auto &ev = events[i];
                             if (ev.data.fd == fd) {
