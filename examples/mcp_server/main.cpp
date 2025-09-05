@@ -20,7 +20,9 @@ using namespace mcp;
 
 int main() {
     FUNC_SCOPE();
-    Logger::setLogLevel(LogLevel::LOG_DEBUG_LEVEL);
+    // Respect MCP_LOG_LEVEL for CI/scripts. Default to INFO to avoid excessive DEBUG noise
+    // in stdio hardening tests where many keepalive notifications are generated.
+    Logger::setLogLevelFromString(GetEnvOrDefault("MCP_LOG_LEVEL", "INFO"));
 
     // Create server via factory and register simple echo tool with inputSchema
     Implementation info{"MCP Demo Server","1.0.0"};

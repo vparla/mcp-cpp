@@ -63,11 +63,15 @@ add_test(
 )
 add_test(
   NAME StdioHardening.WriteQueueOverflow
-  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh overflow"
+  # Reduce DEBUG noise in CI: lots of framed notification debug lines during overflow scenarios
+  # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
+  COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh overflow"
 )
 add_test(
   NAME StdioHardening.WriteTimeout
-  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh writetimeout"
+  # Reduce DEBUG noise in CI: many DEBUG messages when writes stall without a reader.
+  # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
+  COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh writetimeout"
 )
 add_test(
   NAME StdioHardening.BadContentLength

@@ -55,7 +55,13 @@ Tips:
 
 - The Docker test stage runs `ctest -VV`, so GoogleTest logs and any shell script output are printed to your terminal.
 - The demo script [`scripts/run_demo.sh`](./scripts/run_demo.sh) prints `[demo] ...` lines to stderr. You can disable color with `DEMO_COLOR=0`.
-- The stdio hardening tests [`scripts/test_stdio_hardening.sh`](./scripts/test_stdio_hardening.sh) print concise `[OK]/[FAIL]` status lines.
+- Logger color and output device:
+  - `MCP_LOG_COLOR` controls whether the `Logger` uses ANSI color for level labels (default: `1`).
+  - `MCP_STDIO_MODE=1` makes the `Logger` write to stderr instead of stdout to avoid corrupting the stdio JSON-RPC stream. This also ensures colored labels appear in CI logs where stdout may be piped.
+  - Moving forward, negative stdio hardening tests export `MCP_STDIO_MODE=1` so that Logger messages are visible (and colored) in CI output while the server's stdout is reserved exclusively for JSON-RPC frames.
+  - `MCP_LOG_LEVEL` controls verbosity (`DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`). The demo server respects this env var; default is `INFO`.
+  - To reduce noise in stdio hardening tests that generate many keepalive notifications, tests 38 and 39 set `MCP_LOG_LEVEL=INFO`.
+- The stdio hardening tests [`scripts/test_stdio_hardening.sh`](./scripts/test_stdio_hardening.sh) print concise `[OK]/[FAIL]` status lines and now export `MCP_STDIO_MODE=1` for clear colored Logger output in CI.
 
 ### Test cases and what they cover
 

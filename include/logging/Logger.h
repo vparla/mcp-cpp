@@ -23,6 +23,7 @@
 #include <format>
 #include <cstdlib>
 #include <cctype>
+#include <string_view>
 #include "env/EnvVars.h"
 
 #ifdef _WIN32
@@ -161,6 +162,35 @@ public:
     // Configure logging
     static void setLogLevel(LogLevel level) {
         sLogLevel = level;
+    }
+    
+    // Parse a textual log level and return the corresponding LogLevel.
+    // Recognized values (case-insensitive): DEBUG, INFO, WARN, WARNING, ERROR, FATAL.
+    // Defaults to LOG_INFO_LEVEL on unrecognized input.
+    static LogLevel parseLogLevel(std::string_view lvl) {
+        std::string s; s.reserve(lvl.size());
+        for (unsigned char c : lvl) s.push_back(static_cast<char>(::toupper(c)));
+
+        // Single-source-of-truth for level names; used with token pasting below
+        #define MCP_FOR_EACH_LOG_LEVEL(X) \
+            X(DEBUG) \
+            X(INFO)  \
+            X(WARN)  \
+            X(ERROR) \
+            X(FATAL)
+
+        #define MCP_LEVEL_CASE(NAME) if (s == #NAME) return LogLevel::LOG_##NAME##_LEVEL;
+        MCP_FOR_EACH_LOG_LEVEL(MCP_LEVEL_CASE)
+        #undef MCP_LEVEL_CASE
+
+        // Alias WARNING -> WARN for convenience
+        if (s == "WARNING") return LogLevel::LOG_WARN_LEVEL;
+        return LogLevel::LOG_INFO_LEVEL;
+    }
+
+    // Convenience: set log level directly from a string (uses parseLogLevel).
+    static void setLogLevelFromString(std::string_view lvl) {
+        setLogLevel(parseLogLevel(lvl));
     }
     
     static void setLogFile(const std::string& filePath) {

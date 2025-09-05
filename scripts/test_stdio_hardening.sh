@@ -56,6 +56,7 @@ case "$SCENARIO" in
 esac
 
 export MCP_STDIO_CONFIG="$CFG"
+export MCP_STDIO_MODE=1
 if [[ -n "$KA" ]]; then export $KA; fi
 
 # Launch server wired to FIFOs: stdin from FD 3 (C2S), stdout to FD 4 (S2C)
