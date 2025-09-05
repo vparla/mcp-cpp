@@ -54,11 +54,16 @@ struct SamplingCapability {
     // Empty for now - may be extended in future
 };
 
+struct LoggingCapability {
+    // Empty for now - presence indicates logging notifications are supported
+};
+
 struct ServerCapabilities {
     std::optional<ToolsCapability> tools;
     std::optional<ResourcesCapability> resources;
     std::optional<PromptsCapability> prompts;
     std::optional<SamplingCapability> sampling;
+    std::optional<LoggingCapability> logging;
     std::unordered_map<std::string, JSONValue> experimental;
 };
 

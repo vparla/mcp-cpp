@@ -90,6 +90,12 @@ public:
                 if (samplingIt != capsObj.end()) {
                     serverCapabilities.sampling = SamplingCapability{};
                 }
+                
+                // Parse logging capability
+                auto loggingIt = capsObj.find("logging");
+                if (loggingIt != capsObj.end()) {
+                    serverCapabilities.logging = LoggingCapability{};
+                }
             }
         }
     }

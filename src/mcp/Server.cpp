@@ -169,6 +169,7 @@ public:
         capabilities.prompts = PromptsCapability{true};
         capabilities.resources = ResourcesCapability{true, true};
         capabilities.tools = ToolsCapability{true};
+        capabilities.logging = LoggingCapability{};
     }
 
     void handleNotification(std::unique_ptr<JSONRPCNotification> notification) {
@@ -251,6 +252,12 @@ public:
         if (capabilities.sampling.has_value()) {
             JSONValue::Object samplingObj;
             caps["sampling"] = std::make_shared<JSONValue>(samplingObj);
+        }
+        
+        // Advertise logging capability if present
+        if (capabilities.logging.has_value()) {
+            JSONValue::Object loggingObj;
+            caps["logging"] = std::make_shared<JSONValue>(loggingObj);
         }
         
         return JSONValue(caps);
