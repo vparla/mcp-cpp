@@ -57,12 +57,18 @@ public:
     std::atomic<int> keepaliveIntervalMs{-1};
     std::atomic<bool> keepaliveStop{false};
     std::thread keepaliveThread;
-    std::atomic<int> keepaliveConsecutiveFailures{0};
-    std::atomic<int> keepaliveFailureThreshold{3};
+    std::atomic<unsigned int> keepaliveConsecutiveFailures{0u};
+    std::atomic<unsigned int> keepaliveFailureThreshold{3u};
     std::atomic<bool> keepaliveSending{false};
     std::atomic<bool> keepaliveSendFailed{false};
     // Client logging preference (minimum severity)
     std::atomic<Logger::Level> clientLogMin{Logger::Level::DEBUG};
+
+    // Logging rate limiting (per-second)
+    std::atomic<unsigned int> logRateLimitPerSec{0u}; // 0 disables throttling
+    std::mutex logRateMutex;                 // protects window state below
+    std::chrono::steady_clock::time_point logWindowStart{std::chrono::steady_clock::now()};
+    unsigned int logWindowCount{0u};
 
     // Cancellation support
     struct CancellationToken { std::atomic<bool> cancelled{false}; };
@@ -1100,6 +1106,22 @@ mcp::async::Task<void> Server::Impl::coLogToClient(const std::string& level, con
     if (sev < this->clientLogMin.load()) {
         co_return; // Suppressed
     }
+    // Apply simple per-second rate limiting if enabled
+    {
+        unsigned int limit = this->logRateLimitPerSec.load();
+        if (limit > 0u) {
+            std::lock_guard<std::mutex> lk(this->logRateMutex);
+            auto now = std::chrono::steady_clock::now();
+            if (now - this->logWindowStart >= std::chrono::seconds(1)) {
+                this->logWindowStart = now;
+                this->logWindowCount = 0u;
+            }
+            if (this->logWindowCount >= limit) {
+                co_return; // Throttled
+            }
+            ++this->logWindowCount;
+        }
+    }
     JSONValue::Object obj;
     obj["level"] = std::make_shared<JSONValue>(level);
     obj["message"] = std::make_shared<JSONValue>(message);
@@ -1449,7 +1471,7 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                 }
                 pImpl->keepaliveSending.store(false);
                 if (pImpl->keepaliveSendFailed.load()) {
-                    int fails = 1 + pImpl->keepaliveConsecutiveFailures.load();
+                    unsigned int fails = 1u + pImpl->keepaliveConsecutiveFailures.load();
                     pImpl->keepaliveConsecutiveFailures.store(fails);
                     if (fails >= pImpl->keepaliveFailureThreshold.load()) {
                         LOG_ERROR("Keepalive failure threshold reached ({}); closing transport", fails);
@@ -1461,10 +1483,39 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                         break;
                     }
                 } else {
-                    pImpl->keepaliveConsecutiveFailures.store(0);
+                    pImpl->keepaliveConsecutiveFailures.store(0u);
                 }
             }
         });
+    }
+}
+
+void Server::SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& perSecond) {
+    FUNC_SCOPE();
+    unsigned int n = perSecond.has_value() ? perSecond.value() : 0u;
+    if (n == 0u) {
+        pImpl->logRateLimitPerSec.store(0u);
+        // Remove experimental advertisement
+        pImpl->capabilities.experimental.erase("loggingRateLimit");
+        // Reset window state
+        {
+            std::lock_guard<std::mutex> lk(pImpl->logRateMutex);
+            pImpl->logWindowStart = std::chrono::steady_clock::now();
+            pImpl->logWindowCount = 0u;
+        }
+        return;
+    }
+    pImpl->logRateLimitPerSec.store(n);
+    // Advertise experimental logging rate limit
+    JSONValue::Object lv;
+    lv["enabled"] = std::make_shared<JSONValue>(true);
+    lv["perSecond"] = std::make_shared<JSONValue>(static_cast<int64_t>(n));
+    pImpl->capabilities.experimental["loggingRateLimit"] = JSONValue{lv};
+    // Reset window state
+    {
+        std::lock_guard<std::mutex> lk(pImpl->logRateMutex);
+        pImpl->logWindowStart = std::chrono::steady_clock::now();
+        pImpl->logWindowCount = 0u;
     }
 }
 

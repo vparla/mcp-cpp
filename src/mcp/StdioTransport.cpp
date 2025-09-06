@@ -67,7 +67,7 @@ public:
     std::condition_variable cvWrite;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> requestDeadlines;
-    std::atomic<int> requestCounter{0};
+    std::atomic<unsigned int> requestCounter{0u};
 
 #ifdef _WIN32
     HANDLE stopEvent{NULL};

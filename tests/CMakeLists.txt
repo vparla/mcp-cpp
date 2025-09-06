@@ -32,6 +32,7 @@ add_executable(mcp_tests
   test_keepalive.cpp
   test_progress.cpp
   test_server_logging.cpp
+  test_logging_rate_limit.cpp
   test_capabilities_logging.cpp
   test_server_initiated_sampling.cpp
   test_cancellation.cpp

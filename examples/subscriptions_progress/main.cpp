@@ -55,7 +55,7 @@ int main() {
     (void)client->Initialize(clientInfo, caps).get();
 
     // Wire a notification handler to observe filtered resource updates
-    std::atomic<int> updatesSeen{0};
+    std::atomic<unsigned int> updatesSeen{0u};
     client->SetNotificationHandler("notifications/resources/updated",
         [&](const std::string& method, const JSONValue& params){
             (void)method;
@@ -64,7 +64,7 @@ int main() {
                 auto it = o.find("uri");
                 if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
                     std::cout << "resource updated: " << std::get<std::string>(it->second->value) << std::endl;
-                    updatesSeen.fetch_add(1);
+                    updatesSeen.fetch_add(1u);
                 }
             }
         });

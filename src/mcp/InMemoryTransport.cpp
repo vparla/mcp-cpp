@@ -35,7 +35,7 @@ public:
     std::mutex queueMutex;
     std::condition_variable queueCondition;
     std::jthread processingThread;
-    std::atomic<int> requestCounter{0};
+    std::atomic<unsigned int> requestCounter{0u};
     std::mutex requestMutex;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
 

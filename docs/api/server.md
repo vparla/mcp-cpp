@@ -12,6 +12,20 @@ Header: [include/mcp/Server.h](../../include/mcp/Server.h)
 
 This page summarizes the public server APIs with signatures and brief descriptions.
 
+## Experimental capabilities
+
+The MCP specification allows optional, non-standard extensions to be advertised during the initialize handshake under `capabilities.experimental`. These keys are:
+
+- Optional and may change over time.
+- Safe to ignore by peers that do not recognize them.
+- A way to pilot features without changing core protocol messages.
+
+In this SDK the server and/or client use the experimental map for:
+
+- `capabilities.experimental.keepalive` (server → client) — see [Keepalive / Heartbeat](#keepalive--heartbeat).
+- `capabilities.experimental.loggingRateLimit` (server → client) — see [Logging rate limiting (experimental)](#logging-rate-limiting-experimental).
+- `capabilities.experimental.logLevel` (client → server) — see [Logging to client](#logging-to-client) for client-selected minimum log level.
+
 ## Type aliases and handlers
 - using ToolResult = CallToolResult
 - using ResourceContent = ReadResourceResult
@@ -77,6 +91,14 @@ Initialize semantics:
 - The public `Server::HandleInitialize(...)` helper does not send list-changed notifications. It only records client capabilities for non-JSON-RPC wiring scenarios. In normal JSON-RPC flows you do not need to call it.
 - Tests assert exactly one list-changed notification per category after initialize. See [tests/test_initialize_notifications.cpp](../../tests/test_initialize_notifications.cpp).
 
+### Capability advertisement
+
+- The server advertises formal capabilities in the initialize result under the `capabilities` object. In addition to `tools`, `resources`, `prompts`, and `sampling`, the server now also advertises a `logging` capability to indicate support for `notifications/log`.
+- Source: [src/mcp/Server.cpp](../../src/mcp/Server.cpp) in `serializeServerCapabilities()` and constructor defaults.
+- Type: see `LoggingCapability` and `ServerCapabilities.logging` in [include/mcp/Protocol.h](../../include/mcp/Protocol.h).
+- Client parsing: handled in [src/mcp/Client.cpp](../../src/mcp/Client.cpp) `parseServerCapabilities()`.
+- Tests: [tests/test_capabilities_logging.cpp](../../tests/test_capabilities_logging.cpp).
+
 ## Tools
 - void RegisterTool(const std::string& name, ToolHandler handler)
 - void RegisterTool(const Tool& tool, ToolHandler handler)
@@ -140,6 +162,27 @@ Details:
 - A client may advertise a minimum log level via `capabilities.experimental.logLevel` during initialize. The server will suppress log notifications below this threshold.
 - Supported levels include `DEBUG`, `INFO`, `WARN`/`WARNING` (aliases), `ERROR`, `FATAL`. Unknown levels map conservatively and may be suppressed when the client minimum is higher.
 - If the `data` parameter is not provided, the `data` field is omitted in the notification payload.
+
+Notes:
+
+- The server formally advertises logging support via `capabilities.logging = {}` in its initialize response so clients can gate logging features based on presence.
+
+### Logging rate limiting (experimental)
+
+- void SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& perSecond)
+  - Configures a simple per-second throttle for `notifications/log`. When set to a non-zero value, at most `perSecond` log notifications will be delivered per second. When not set or `0`, throttling is disabled (subject only to the client's minimum log level).
+
+Advertisement (experimental):
+
+- When enabled, the initialize response includes `capabilities.experimental.loggingRateLimit` with:
+  - `enabled: true`
+  - `perSecond: number`
+- When disabled (unset or `0`), the advertisement is removed.
+
+Notes:
+
+- Throttling is applied after the client-min-level filter and before the notification is sent.
+- See tests in [tests/test_logging_rate_limit.cpp](../../tests/test_logging_rate_limit.cpp).
 
 Example:
 

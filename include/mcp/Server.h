@@ -272,6 +272,18 @@ public:
     //==========================================================================================================
     virtual void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) = 0;
 
+    /////////////////////////////////////////// Logging rate limiting //////////////////////////////////////////
+    //==========================================================================================================
+    // Configures a simple per-second throttle for notifications/log. When set to a positive value, the server
+    // will deliver at most the specified number of log notifications per second. When unset or <= 0, the
+    // throttle is disabled (unlimited), subject only to the client's minimum log level filter.
+    // Args:
+    //   perSecond: Maximum notifications/log per second; disable when not set or <= 0.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& perSecond) = 0;
+
     ///////////////////////////////////////////// Logging to client ////////////////////////////////////////////
     //==========================================================================================================
     // Sends a structured log message to the connected client via notifications/log. Messages below the
@@ -440,6 +452,9 @@ public:
 
     // Keepalive / Heartbeat
     void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) override;
+
+    // Logging rate limiting
+    void SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& perSecond) override;
 
     // Logging to client
     std::future<void> LogToClient(const std::string& level,

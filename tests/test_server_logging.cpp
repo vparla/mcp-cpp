@@ -24,13 +24,13 @@ TEST(ServerLogging, RespectsClientLogLevel) {
     auto serverTrans = std::move(pair.second);
 
     // Capture notifications/log on client side
-    std::atomic<int> received{0};
+    std::atomic<unsigned int> received{0u};
     std::promise<std::string> gotErrorMsg; auto gotErrorFut = gotErrorMsg.get_future();
 
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
         if (!note) return;
         if (note->method == Methods::Log && note->params.has_value()) {
-            received.fetch_add(1);
+            received.fetch_add(1u);
             const auto& v = note->params.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& o = std::get<JSONValue::Object>(v.value);
@@ -121,10 +121,10 @@ TEST(ServerLogging, UnknownLevelSuppressedAtWarnMin) {
     auto client = std::move(pair.first);
     auto serverTrans = std::move(pair.second);
 
-    std::atomic<int> received{0};
+    std::atomic<unsigned int> received{0u};
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
         if (note && note->method == Methods::Log) {
-            received.fetch_add(1);
+            received.fetch_add(1u);
         }
     });
 

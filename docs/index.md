@@ -19,6 +19,7 @@ Contents:
  - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)
 - Keepalive & Logging (Server API): see [docs/api/server.md](./api/server.md#keepalive--heartbeat) and [docs/api/server.md](./api/server.md#logging-to-client)
 - Parity Matrix: see [docs/parity-matrix.md](./parity-matrix.md)
+- SDK Comparison: see [docs/cpp-sdk-comparison.md](./cpp-sdk-comparison.md)
 - Examples
 - FAQ
  
@@ -53,6 +54,21 @@ Detailed per-interface API documentation:
 - Client API: [docs/api/client.md](./api/client.md)
 - Server API: [docs/api/server.md](./api/server.md)
 - Transport API: [docs/api/transport.md](./api/transport.md)
+
+## Experimental capabilities
+
+The MCP specification allows non-standard extensions to be advertised under `capabilities.experimental` during the initialize handshake. These keys are optional, subject to change, and should be safely ignored by clients that do not recognize them.
+
+- What this means:
+  - Server and client may advertise additional feature flags or hints via `capabilities.experimental`.
+  - Unknown experimental keys must be ignored by the peer; features should degrade gracefully when absent.
+
+- Used in this SDK:
+  - `capabilities.experimental.keepalive` (server → client): see [Keepalive](./api/server.md#keepalive--heartbeat)
+  - `capabilities.experimental.loggingRateLimit` (server → client): see [Logging rate limiting](./api/server.md#logging-rate-limiting-experimental)
+  - `capabilities.experimental.logLevel` (client → server minimum log level): see [Logging to client](./api/server.md#logging-to-client)
+
+These experimental keys are a standard extension mechanism within MCP and do not change the core protocol messages; they provide optional behaviors that can evolve without breaking existing clients.
 
 ## Environment variables
 

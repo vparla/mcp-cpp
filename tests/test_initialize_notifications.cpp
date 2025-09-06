@@ -36,14 +36,14 @@ TEST(InitializeNotifications, ExactlyOneListChangedPerCategory) {
     std::promise<void> resourcesOnce; auto resourcesFut = resourcesOnce.get_future();
     std::promise<void> promptsOnce; auto promptsFut = promptsOnce.get_future();
 
-    std::atomic<int> toolsCount{0};
-    std::atomic<int> resourcesCount{0};
-    std::atomic<int> promptsCount{0};
+    std::atomic<unsigned int> toolsCount{0u};
+    std::atomic<unsigned int> resourcesCount{0u};
+    std::atomic<unsigned int> promptsCount{0u};
 
     client->SetNotificationHandler(Methods::ToolListChanged,
         [&](const std::string& method, const JSONValue& params){
             (void)method; (void)params;
-            if (toolsCount.fetch_add(1, std::memory_order_relaxed) == 0) {
+            if (toolsCount.fetch_add(1u, std::memory_order_relaxed) == 0u) {
                 toolsOnce.set_value();
             }
         });
@@ -51,7 +51,7 @@ TEST(InitializeNotifications, ExactlyOneListChangedPerCategory) {
     client->SetNotificationHandler(Methods::ResourceListChanged,
         [&](const std::string& method, const JSONValue& params){
             (void)method; (void)params;
-            if (resourcesCount.fetch_add(1, std::memory_order_relaxed) == 0) {
+            if (resourcesCount.fetch_add(1u, std::memory_order_relaxed) == 0u) {
                 resourcesOnce.set_value();
             }
         });
@@ -59,7 +59,7 @@ TEST(InitializeNotifications, ExactlyOneListChangedPerCategory) {
     client->SetNotificationHandler(Methods::PromptListChanged,
         [&](const std::string& method, const JSONValue& params){
             (void)method; (void)params;
-            if (promptsCount.fetch_add(1, std::memory_order_relaxed) == 0) {
+            if (promptsCount.fetch_add(1u, std::memory_order_relaxed) == 0u) {
                 promptsOnce.set_value();
             }
         });
@@ -80,9 +80,9 @@ TEST(InitializeNotifications, ExactlyOneListChangedPerCategory) {
     // Give a brief moment to ensure no duplicate arrives
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    EXPECT_EQ(toolsCount.load(), 1);
-    EXPECT_EQ(resourcesCount.load(), 1);
-    EXPECT_EQ(promptsCount.load(), 1);
+    EXPECT_EQ(toolsCount.load(), 1u);
+    EXPECT_EQ(resourcesCount.load(), 1u);
+    EXPECT_EQ(promptsCount.load(), 1u);
 
     // Cleanup
     ASSERT_NO_THROW(client->Disconnect().get());
