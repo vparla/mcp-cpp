@@ -87,10 +87,10 @@ These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD]
 
 ## Coding style checklist
 
-Follow the project style rules in `task.md` and the Google C++ Style Guide:
 
 - Use C++20 and avoid busy loops; prefer async, futures/promises, and coroutines.
 - No third-party runtime deps; standard library and C-runtime only.
 - Every source file must include the SPDX header banner with filename and purpose.
-- Brace style and formatting per `task.md`; see Google C++ Style Guide for general rules: https://google.github.io/styleguide/cppguide.html#C++_Version
+- Follow the Google C++ Style Guide: 
+https://google.github.io/styleguide/cppguide.html#C++_Version
 - Add comprehensive GoogleTest coverage for new changes, including negative paths; register tests in `tests/CMakeLists.txt`.
