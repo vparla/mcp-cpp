@@ -4,17 +4,18 @@
 // File: Client.cpp
 // Purpose: MCP client implementation
 //==========================================================================================================
-
-#include "mcp/Client.h"
-#include "mcp/Protocol.h"
-#include "logging/Logger.h"
-#include "mcp/async/Task.h"
-#include "mcp/async/FutureAwaitable.h"
 #include <chrono>
 #include <atomic>
 #include <thread>
 #include <unordered_map>
 #include <optional>
+#include "mcp/Client.h"
+#include "mcp/Protocol.h"
+#include "logging/Logger.h"
+#include "mcp/async/Task.h"
+#include "mcp/async/FutureAwaitable.h"
+#include "mcp/errors/Errors.h"
+
 
 namespace mcp {
 
@@ -168,8 +169,8 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
         try {
             if (req.method == Methods::CreateMessage) {
                 if (!this->samplingHandler) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotAllowed,
-                                               "No sampling handler registered", std::nullopt);
+                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No sampling handler registered";
+                    return errors::makeErrorResponse(req.id, e);
                 }
                 JSONValue messages;
                 JSONValue modelPreferences;

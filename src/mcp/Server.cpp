@@ -4,12 +4,6 @@
 // File: Server.cpp
 // Purpose: MCP server implementation
 //==========================================================================================================
-
-#include "mcp/Server.h"
-#include "mcp/Protocol.h"
-#include "logging/Logger.h"
-#include "mcp/async/Task.h"
-#include "mcp/async/FutureAwaitable.h"
 #include <algorithm>
 #include <functional>
 #include <unordered_set>
@@ -21,6 +15,13 @@
 #include <cctype>
 #include <future>
 #include <stop_token>
+#include "mcp/Server.h"
+#include "mcp/Protocol.h"
+#include "logging/Logger.h"
+#include "mcp/async/Task.h"
+#include "mcp/async/FutureAwaitable.h"
+#include "mcp/errors/Errors.h"
+
 
 namespace mcp {
 
@@ -394,13 +395,8 @@ public:
         LOG_DEBUG("Handling tools/call request");
         
         if (!request.params.has_value()) {
-            auto response = std::make_unique<JSONRPCResponse>();
-            response->id = request.id;
-            JSONValue::Object errorObj;
-            errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32602));
-            errorObj["message"] = std::make_shared<JSONValue>(std::string("Invalid params"));
-            response->error = JSONValue(errorObj);
-            return response;
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+            return errors::makeErrorResponse(request.id, e);
         }
         
         std::string toolName;
@@ -599,13 +595,8 @@ public:
         LOG_DEBUG("Handling resources/read request");
         
         if (!request.params.has_value()) {
-            auto response = std::make_unique<JSONRPCResponse>();
-            response->id = request.id;
-            JSONValue::Object errorObj;
-            errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32602));
-            errorObj["message"] = std::make_shared<JSONValue>(std::string("Invalid params"));
-            response->error = JSONValue(errorObj);
-            return response;
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+            return errors::makeErrorResponse(request.id, e);
         }
         
         std::string uri;
@@ -734,13 +725,8 @@ public:
         LOG_DEBUG("Handling prompts/get request");
         
         if (!request.params.has_value()) {
-            auto response = std::make_unique<JSONRPCResponse>();
-            response->id = request.id;
-            JSONValue::Object errorObj;
-            errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32602));
-            errorObj["message"] = std::make_shared<JSONValue>(std::string("Invalid params"));
-            response->error = JSONValue(errorObj);
-            return response;
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+            return errors::makeErrorResponse(request.id, e);
         }
         
         std::string promptName;
@@ -904,8 +890,8 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
             } else if (req.method == Methods::CreateMessage) {
                 // Client-initiated sampling request to the server (if supported)
                 if (!this->samplingHandler) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotAllowed,
-                                               "No server sampling handler registered", std::nullopt);
+                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No server sampling handler registered";
+                    return errors::makeErrorResponse(req.id, e);
                 }
                 JSONValue messages; JSONValue modelPreferences; JSONValue systemPrompt; JSONValue includeContext;
                 if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
@@ -939,7 +925,7 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
                 }
                 return r;
             }
-            return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotFound, "Method not found", std::nullopt);
+            { errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; return errors::makeErrorResponse(req.id, e); }
         } catch (const std::exception& e) {
             return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
         }

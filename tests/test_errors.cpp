@@ -8,6 +8,11 @@
 #include <gtest/gtest.h>
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/errors/Errors.h"
+#include "mcp/InMemoryTransport.hpp"
+#include "mcp/Protocol.h"
+#include "mcp/Server.h"
+#include "mcp/Client.h"
+#include <future>
 
 using namespace mcp;
 
@@ -24,6 +29,108 @@ TEST(Errors, CategoryMapping) {
     EXPECT_EQ(mcp::errors::errorCategoryFromCode(JSONRPCErrorCodes::ToolNotFound), ErrorCategory::McpToolNotFound);
     EXPECT_EQ(mcp::errors::errorCategoryFromCode(JSONRPCErrorCodes::PromptNotFound), ErrorCategory::McpPromptNotFound);
     EXPECT_EQ(mcp::errors::errorCategoryFromCode(12345), ErrorCategory::Unknown);
+}
+
+//=============================== E2E negative-path tests =================================
+
+TEST(ErrorsE2E, ToolsCall_InvalidParams_ErrorShape) {
+    using namespace mcp;
+    auto pair = InMemoryTransport::CreatePair();
+    auto client = std::move(pair.first);
+    auto serverTrans = std::move(pair.second);
+
+    Server server("ErrServer");
+    ASSERT_NO_THROW(server.Start(std::move(serverTrans)).get());
+    ASSERT_NO_THROW(client->Start().get());
+
+    // Initialize with minimal params
+    auto init = std::make_unique<JSONRPCRequest>();
+    init->method = Methods::Initialize;
+    init->params.emplace(JSONValue::Object{});
+    auto initRespFut = client->SendRequest(std::move(init));
+    ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+
+    // CallTool with missing params -> InvalidParams error
+    auto bad = std::make_unique<JSONRPCRequest>();
+    bad->method = Methods::CallTool;
+    auto fut = client->SendRequest(std::move(bad));
+    ASSERT_EQ(fut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto resp = fut.get();
+    ASSERT_TRUE(resp != nullptr);
+    ASSERT_TRUE(resp->IsError());
+    auto parsed = mcp::errors::mcpErrorFromResponse(*resp);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->code, JSONRPCErrorCodes::InvalidParams);
+    EXPECT_FALSE(parsed->data.has_value());
+
+    ASSERT_NO_THROW(client->Close().get());
+    ASSERT_NO_THROW(server.Stop().get());
+}
+
+TEST(ErrorsE2E, UnknownMethod_MethodNotFound) {
+    using namespace mcp;
+    auto pair = InMemoryTransport::CreatePair();
+    auto client = std::move(pair.first);
+    auto serverTrans = std::move(pair.second);
+
+    Server server("ErrServer");
+    ASSERT_NO_THROW(server.Start(std::move(serverTrans)).get());
+    ASSERT_NO_THROW(client->Start().get());
+
+    // Initialize minimal
+    auto init = std::make_unique<JSONRPCRequest>();
+    init->method = Methods::Initialize;
+    init->params.emplace(JSONValue::Object{});
+    auto initRespFut = client->SendRequest(std::move(init));
+    ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+
+    // Unknown method
+    auto req = std::make_unique<JSONRPCRequest>();
+    req->method = std::string("does/not/exist");
+    auto fut = client->SendRequest(std::move(req));
+    ASSERT_EQ(fut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto resp = fut.get();
+    ASSERT_TRUE(resp != nullptr);
+    ASSERT_TRUE(resp->IsError());
+    auto parsed = mcp::errors::mcpErrorFromResponse(*resp);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->code, JSONRPCErrorCodes::MethodNotFound);
+
+    ASSERT_NO_THROW(client->Close().get());
+    ASSERT_NO_THROW(server.Stop().get());
+}
+
+TEST(ErrorsE2E, ServerInitiatedSampling_ClientNoHandler_MethodNotAllowed) {
+    using namespace mcp;
+    // Create pair
+    auto pair = InMemoryTransport::CreatePair();
+    auto clientTrans = std::move(pair.first);
+    auto serverTrans = std::move(pair.second);
+
+    // Server
+    Server server("ErrServer");
+    ASSERT_NO_THROW(server.Start(std::move(serverTrans)).get());
+
+    // High-level client
+    ClientFactory factory;
+    Implementation clientInfo{"ErrClient","1.0.0"};
+    auto client = factory.CreateClient(clientInfo);
+    ASSERT_NO_THROW(client->Connect(std::move(clientTrans)).get());
+    ClientCapabilities caps; // defaults
+    ASSERT_NO_THROW((void)client->Initialize(clientInfo, caps).get());
+
+    // Server requests client to create a message; client has no sampling handler
+    CreateMessageParams p;
+    p.messages.push_back(JSONValue{JSONValue::Object{}});
+    auto fut = server.RequestCreateMessage(p);
+    ASSERT_EQ(fut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto v = fut.get();
+    auto parsed = mcp::errors::mcpErrorFromErrorValue(v);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_EQ(parsed->code, JSONRPCErrorCodes::MethodNotAllowed);
+
+    ASSERT_NO_THROW(client->Disconnect().get());
+    ASSERT_NO_THROW(server.Stop().get());
 }
 
 TEST(Errors, FromErrorValue_Valid) {
