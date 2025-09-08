@@ -36,6 +36,38 @@ server.SetValidationMode(mcp::validation::ValidationMode::Strict);
 ```
 
 ## Behavior
-- In this initial scaffolding, the toggle is a no-op (no checks executed).
-- Upcoming iterations will add lightweight validators for tools/resources/prompts responses, sampling, and progress.
-- Failures will be reported as typed errors or `std::runtime_error` (for typed wrappers), aligned with the SDK error handling policy.
+
+When set to Strict, the SDK validates the following shapes at runtime:
+
+- Tools list responses (`tools/list`): requires each item to have `name` and `description`, optional `inputSchema`, and optional `nextCursor` as string or integer.
+- Resources list responses (`resources/list`): requires each item to have `uri` and `name`, optional `description` and `mimeType`, and optional `nextCursor`.
+- Resource templates list responses (`resources/templates/list`): requires each item to have `uriTemplate` and `name`, optional `description` and `mimeType`, and optional `nextCursor`.
+- Prompts list responses (`prompts/list`): requires each item to have `name` and `description`, optional `arguments`, and optional `nextCursor`.
+- Server-initiated sampling (`sampling/createMessage`) request params and result:
+  - Params: `messages` must be an array; when present, each message `content` must be an array of text content items (`{ type: "text", text: string }`).
+  - Result: requires `model`, `role`, and `content` (array of text content items); optional `stopReason`.
+- Progress notifications: require non-empty `progressToken` and `progress` in [0.0, 1.0].
+
+On the client side, invalid list responses and typed wrapper results throw `std::runtime_error` with an error logged before the throw. For server-initiated sampling, invalid params/results are returned as JSON-RPC errors (InvalidParams/InternalError) with an error log entry.
+
+On the server side, invalid handler results or response constructions under Strict mode return JSON-RPC errors and are logged.
+
+## Failure examples
+
+- `tools/list` invalid item (missing description):
+  ```json
+  { "tools": [ { "name": "t1" } ] }
+  ```
+  Client Strict mode logs and throws; server Strict mode returns InternalError.
+
+- `sampling/createMessage` invalid params (message content not array):
+  ```json
+  { "messages": [ { "role": "user", "content": "hi" } ] }
+  ```
+  Client Strict mode responds with InvalidParams to the server.
+
+- `sampling/createMessage` invalid result (content not array):
+  ```json
+  { "model": "m", "role": "assistant", "content": "oops" }
+  ```
+  Client/Server Strict mode responds with InternalError.

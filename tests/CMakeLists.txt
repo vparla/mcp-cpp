@@ -40,6 +40,8 @@ add_executable(mcp_tests
   test_errors.cpp
   test_client_typed.cpp
   test_validation_mode.cpp
+  test_validation_lists.cpp
+  test_validation_sampling.cpp
 )
 
 target_link_libraries(mcp_tests

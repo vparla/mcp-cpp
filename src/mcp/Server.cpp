@@ -388,6 +388,26 @@ public:
             resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
         }
         JSONValue result(resultObj);
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateToolsListResultJson(result)) {
+                size_t items = 0; bool hasNext = false; std::string nextType;
+                if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                    const auto& o = std::get<JSONValue::Object>(result.value);
+                    auto itArr = o.find("tools");
+                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                        items = std::get<JSONValue::Array>(itArr->second->value).size();
+                    }
+                    auto itNc = o.find("nextCursor");
+                    hasNext = (itNc != o.end());
+                    if (hasNext) {
+                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                    }
+                }
+                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListTools, items, hasNext, nextType);
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid tools/list result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         
         auto response = std::make_unique<JSONRPCResponse>();
         response->id = request.id;
@@ -534,6 +554,26 @@ public:
             resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
         }
         JSONValue result(resultObj);
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateResourcesListResultJson(result)) {
+                size_t items = 0; bool hasNext = false; std::string nextType;
+                if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                    const auto& o = std::get<JSONValue::Object>(result.value);
+                    auto itArr = o.find("resources");
+                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                        items = std::get<JSONValue::Array>(itArr->second->value).size();
+                    }
+                    auto itNc = o.find("nextCursor");
+                    hasNext = (itNc != o.end());
+                    if (hasNext) {
+                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                    }
+                }
+                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResources, items, hasNext, nextType);
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/list result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         
         auto response = std::make_unique<JSONRPCResponse>();
         response->id = request.id;
@@ -592,9 +632,31 @@ public:
         if (limitOpt.has_value() && i < total) {
             resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
         }
+        // Strict validation of response shape
+        JSONValue result{resultObj};
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateResourceTemplatesListResultJson(result)) {
+                size_t items = 0; bool hasNext = false; std::string nextType;
+                if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                    const auto& o = std::get<JSONValue::Object>(result.value);
+                    auto itArr = o.find("resourceTemplates");
+                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                        items = std::get<JSONValue::Array>(itArr->second->value).size();
+                    }
+                    auto itNc = o.find("nextCursor");
+                    hasNext = (itNc != o.end());
+                    if (hasNext) {
+                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                    }
+                }
+                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResourceTemplates, items, hasNext, nextType);
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/templates/list result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         auto response = std::make_unique<JSONRPCResponse>();
         response->id = request.id;
-        response->result = JSONValue{resultObj};
+        response->result = result;
         return response;
     }
 
@@ -723,6 +785,26 @@ public:
             resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
         }
         JSONValue result(resultObj);
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validatePromptsListResultJson(result)) {
+                size_t items = 0; bool hasNext = false; std::string nextType;
+                if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                    const auto& o = std::get<JSONValue::Object>(result.value);
+                    auto itArr = o.find("prompts");
+                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                        items = std::get<JSONValue::Array>(itArr->second->value).size();
+                    }
+                    auto itNc = o.find("nextCursor");
+                    hasNext = (itNc != o.end());
+                    if (hasNext) {
+                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                    }
+                }
+                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListPrompts, items, hasNext, nextType);
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid prompts/list result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         
         auto response = std::make_unique<JSONRPCResponse>();
         response->id = request.id;
@@ -913,10 +995,53 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
                     it = o.find("systemPrompt"); if (it != o.end()) systemPrompt = *it->second;
                     it = o.find("includeContext"); if (it != o.end()) includeContext = *it->second;
                 }
+                // Strict validation of incoming params
+                if (this->validationMode == validation::ValidationMode::Strict) {
+                    JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
+                    if (!validation::validateCreateMessageParamsJson(paramsVal)) {
+                        bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
+                        size_t messagesCount = 0;
+                        if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
+                            const auto& po = std::get<JSONValue::Object>(paramsVal.value);
+                            auto itP = po.find("messages");
+                            hasMessages = (itP != po.end());
+                            if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
+                                messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
+                            }
+                            hasModelPreferences = (po.find("modelPreferences") != po.end());
+                            hasSystemPrompt = (po.find("systemPrompt") != po.end());
+                            hasIncludeContext = (po.find("includeContext") != po.end());
+                        }
+                        LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={} (server)",
+                                  Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                }
                 auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
                 JSONValue result = fut.get();
                 if (token && token->cancelled.load()) {
                     return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+                }
+                // Strict validation of handler result
+                if (this->validationMode == validation::ValidationMode::Strict) {
+                    if (!validation::validateCreateMessageResultJson(result)) {
+                        bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
+                        if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                            const auto& ro = std::get<JSONValue::Object>(result.value);
+                            auto itM = ro.find("model"); hasModel = (itM != ro.end());
+                            auto itR = ro.find("role"); hasRole = (itR != ro.end());
+                            auto itC = ro.find("content");
+                            if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
+                                hasContentArray = true;
+                                contentCount = std::get<JSONValue::Array>(itC->second->value).size();
+                            }
+                        }
+                        LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={} (server)",
+                                  Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
                 }
                 auto resp = std::make_unique<JSONRPCResponse>();
                 resp->id = req.id;

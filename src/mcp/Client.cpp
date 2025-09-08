@@ -9,6 +9,8 @@
 #include <thread>
 #include <unordered_map>
 #include <optional>
+#include <stdexcept>
+
 #include "mcp/Client.h"
 #include "mcp/Protocol.h"
 #include "logging/Logger.h"
@@ -16,6 +18,7 @@
 #include "mcp/async/FutureAwaitable.h"
 #include "mcp/errors/Errors.h"
 #include "mcp/validation/Validation.h"
+#include "mcp/validation/Validators.h"
 
 
 namespace mcp {
@@ -197,8 +200,51 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
                     it = o.find("includeContext");
                     if (it != o.end()) includeContext = *it->second;
                 }
+                // Strict validation of incoming request params
+                if (this->validationMode == validation::ValidationMode::Strict) {
+                    JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
+                    if (!validation::validateCreateMessageParamsJson(paramsVal)) {
+                        bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
+                        size_t messagesCount = 0;
+                        if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
+                            const auto& po = std::get<JSONValue::Object>(paramsVal.value);
+                            auto itP = po.find("messages");
+                            hasMessages = (itP != po.end());
+                            if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
+                                messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
+                            }
+                            hasModelPreferences = (po.find("modelPreferences") != po.end());
+                            hasSystemPrompt = (po.find("systemPrompt") != po.end());
+                            hasIncludeContext = (po.find("includeContext") != po.end());
+                        }
+                        LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={}",
+                                  Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                }
                 auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
                 JSONValue result = fut.get();
+                // Strict validation of handler result
+                if (this->validationMode == validation::ValidationMode::Strict) {
+                    if (!validation::validateCreateMessageResultJson(result)) {
+                        bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
+                        if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                            const auto& ro = std::get<JSONValue::Object>(result.value);
+                            auto itM = ro.find("model"); hasModel = (itM != ro.end());
+                            auto itR = ro.find("role"); hasRole = (itR != ro.end());
+                            auto itC = ro.find("content");
+                            if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
+                                hasContentArray = true;
+                                contentCount = std::get<JSONValue::Array>(itC->second->value).size();
+                            }
+                        }
+                        LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={}",
+                                  Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                }
                 auto resp = std::make_unique<JSONRPCResponse>();
                 resp->id = req.id;
                 resp->result = result;
@@ -325,6 +371,26 @@ mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateToolsListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("tools");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListTools, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: tools/list result shape");
+                }
+            }
             const auto& result = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(result.value)) {
                 const auto& obj = std::get<JSONValue::Object>(result.value);
@@ -347,7 +413,7 @@ mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListTools exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListTools exception: {}", e.what()); throw; }
     co_return tools;
 }
 
@@ -364,6 +430,26 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateToolsListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("tools");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} (paged) result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListTools, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: tools/list (paged) result shape");
+                }
+            }
             const auto& v = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& obj = std::get<JSONValue::Object>(v.value);
@@ -390,7 +476,7 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListToolsPaged exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListToolsPaged exception: {}", e.what()); throw; }
     co_return out;
 }
 
@@ -404,6 +490,26 @@ mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateResourcesListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("resources");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResources, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: resources/list result shape");
+                }
+            }
             const auto& result = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(result.value)) {
                 const auto& obj = std::get<JSONValue::Object>(result.value);
@@ -427,7 +533,7 @@ mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListResources exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListResources exception: {}", e.what()); throw; }
     co_return resources;
 }
 
@@ -444,6 +550,26 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateResourcesListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("resources");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} (paged) result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResources, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: resources/list (paged) result shape");
+                }
+            }
             const auto& v = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& obj = std::get<JSONValue::Object>(v.value);
@@ -472,7 +598,7 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListResourcesPaged exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListResourcesPaged exception: {}", e.what()); throw; }
     co_return out;
 }
 
@@ -486,6 +612,26 @@ mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemp
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateResourceTemplatesListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("resourceTemplates");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResourceTemplates, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: resources/templates/list result shape");
+                }
+            }
             const auto& result = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(result.value)) {
                 const auto& obj = std::get<JSONValue::Object>(result.value);
@@ -509,7 +655,7 @@ mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemp
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplates exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplates exception: {}", e.what()); throw; }
     co_return templates;
 }
 
@@ -526,6 +672,26 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateResourceTemplatesListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("resourceTemplates");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} (paged) result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResourceTemplates, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: resources/templates/list (paged) result shape");
+                }
+            }
             const auto& v = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& obj = std::get<JSONValue::Object>(v.value);
@@ -554,7 +720,7 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplatesPaged exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplatesPaged exception: {}", e.what()); throw; }
     co_return out;
 }
 
@@ -568,6 +734,26 @@ mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validatePromptsListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("prompts");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListPrompts, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: prompts/list result shape");
+                }
+            }
             const auto& result = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(result.value)) {
                 const auto& obj = std::get<JSONValue::Object>(result.value);
@@ -589,7 +775,7 @@ mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListPrompts exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListPrompts exception: {}", e.what()); throw; }
     co_return prompts;
 }
 
@@ -606,6 +792,26 @@ mcp::async::Task<PromptsListResult> Client::Impl::coListPromptsPaged(const std::
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response && !response->IsError() && response->result.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validatePromptsListResultJson(response->result.value())) {
+                    const auto& rv = response->result.value();
+                    size_t items = 0; bool hasNext = false; std::string nextType;
+                    if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+                        const auto& objV = std::get<JSONValue::Object>(rv.value);
+                        auto itArr = objV.find("prompts");
+                        if (itArr != objV.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+                            items = std::get<JSONValue::Array>(itArr->second->value).size();
+                        }
+                        auto itNc = objV.find("nextCursor");
+                        hasNext = (itNc != objV.end());
+                        if (hasNext) {
+                            nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
+                        }
+                    }
+                    LOG_ERROR("Validation failed (Strict): {} (paged) result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListPrompts, items, hasNext, nextType);
+                    throw std::runtime_error("Validation failed: prompts/list (paged) result shape");
+                }
+            }
             const auto& v = response->result.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& obj = std::get<JSONValue::Object>(v.value);
@@ -632,7 +838,7 @@ mcp::async::Task<PromptsListResult> Client::Impl::coListPromptsPaged(const std::
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListPromptsPaged exception: {}", e.what()); }
+    } catch (const std::exception& e) { LOG_ERROR("ListPromptsPaged exception: {}", e.what()); throw; }
     co_return out;
 }
 
