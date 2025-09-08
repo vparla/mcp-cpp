@@ -38,6 +38,7 @@ add_executable(mcp_tests
   test_cancellation.cpp
   test_initialize_notifications.cpp
   test_errors.cpp
+  test_client_typed.cpp
 )
 
 target_link_libraries(mcp_tests

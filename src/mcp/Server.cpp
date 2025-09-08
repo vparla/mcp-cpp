@@ -425,13 +425,8 @@ public:
             std::lock_guard<std::mutex> lock(registryMutex);
             auto it = toolHandlers.find(toolName);
             if (it == toolHandlers.end()) {
-                auto response = std::make_unique<JSONRPCResponse>();
-                response->id = request.id;
-                JSONValue::Object errorObj;
-                errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32601));
-                errorObj["message"] = std::make_shared<JSONValue>(std::string("Tool not found: ") + toolName);
-                response->error = JSONValue(errorObj);
-                return response;
+                errors::McpError e; e.code = JSONRPCErrorCodes::ToolNotFound; e.message = "Tool not found";
+                return errors::makeErrorResponse(request.id, e);
             }
             handlerCopy = it->second;
         }
@@ -617,13 +612,8 @@ public:
             std::lock_guard<std::mutex> lock(registryMutex);
             auto it = resourceHandlers.find(uri);
             if (it == resourceHandlers.end()) {
-                auto response = std::make_unique<JSONRPCResponse>();
-                response->id = request.id;
-                JSONValue::Object errorObj;
-                errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32601));
-                errorObj["message"] = std::make_shared<JSONValue>(std::string("Resource not found: ") + uri);
-                response->error = JSONValue(errorObj);
-                return response;
+                errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found";
+                return errors::makeErrorResponse(request.id, e);
             }
             handlerCopy = it->second;
         }
@@ -749,13 +739,8 @@ public:
         std::lock_guard<std::mutex> lock(registryMutex);
         auto it = promptHandlers.find(promptName);
         if (it == promptHandlers.end()) {
-            auto response = std::make_unique<JSONRPCResponse>();
-            response->id = request.id;
-            JSONValue::Object errorObj;
-            errorObj["code"] = std::make_shared<JSONValue>(static_cast<int64_t>(-32601));
-            errorObj["message"] = std::make_shared<JSONValue>(std::string("Prompt not found: ") + promptName);
-            response->error = JSONValue(errorObj);
-            return response;
+            errors::McpError e; e.code = JSONRPCErrorCodes::PromptNotFound; e.message = "Prompt not found";
+            return errors::makeErrorResponse(request.id, e);
         }
         
         // Call the prompt handler
