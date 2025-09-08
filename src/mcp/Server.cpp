@@ -21,6 +21,7 @@
 #include "mcp/async/Task.h"
 #include "mcp/async/FutureAwaitable.h"
 #include "mcp/errors/Errors.h"
+#include "mcp/validation/Validation.h"
 
 
 namespace mcp {
@@ -67,9 +68,12 @@ public:
 
     // Logging rate limiting (per-second)
     std::atomic<unsigned int> logRateLimitPerSec{0u}; // 0 disables throttling
-    std::mutex logRateMutex;                 // protects window state below
-    std::chrono::steady_clock::time_point logWindowStart{std::chrono::steady_clock::now()};
+    std::mutex logRateMutex;                 // Logging rate limit
+    std::chrono::steady_clock::time_point logWindowStart{};
     unsigned int logWindowCount{0u};
+
+    // Validation mode (opt-in)
+    validation::ValidationMode validationMode{validation::ValidationMode::Off};
 
     // Cancellation support
     struct CancellationToken { std::atomic<bool> cancelled{false}; };
@@ -1334,6 +1338,17 @@ std::future<void> Server::SendNotification(const std::string& method, const JSON
 std::future<void> Server::LogToClient(const std::string& level, const std::string& message, const std::optional<JSONValue>& data) {
     FUNC_SCOPE();
     return pImpl->coLogToClient(level, message, data).toFuture();
+}
+
+// Validation (opt-in)
+void Server::SetValidationMode(validation::ValidationMode mode) {
+    FUNC_SCOPE();
+    pImpl->validationMode = mode;
+}
+
+validation::ValidationMode Server::GetValidationMode() const {
+    FUNC_SCOPE();
+    return pImpl->validationMode;
 }
 
 std::future<void> Server::SendProgress(const std::string& token, double progress, const std::string& message) {

@@ -20,6 +20,8 @@ Contents:
 - Keepalive & Logging (Server API): see [docs/api/server.md](./api/server.md#keepalive--heartbeat) and [docs/api/server.md](./api/server.md#logging-to-client)
 - Parity Matrix: see [docs/parity-matrix.md](./parity-matrix.md)
 - SDK Comparison: see [docs/cpp-sdk-comparison.md](./cpp-sdk-comparison.md)
+- Typed Client Wrappers: see [docs/api/typed.md](./api/typed.md)
+- Validation (opt-in): see [docs/api/validation.md](./api/validation.md)
 - Examples
 - FAQ
  

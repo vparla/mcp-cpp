@@ -209,3 +209,7 @@ server.LogToClient("WARN", "slow-path", JSONValue{obj}).get();
 - void SetErrorHandler(ErrorHandler handler)
 - ServerCapabilities GetCapabilities() const
 - void SetCapabilities(const ServerCapabilities& capabilities)
+
+## Validation (opt-in)
+
+The server exposes a validation mode toggle (Off/Strict) to enable upcoming runtime shape checks for request/response payloads. See details and usage in [docs/api/validation.md](./validation.md).

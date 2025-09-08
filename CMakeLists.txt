@@ -86,6 +86,7 @@ if(MCP_BUILD_EXAMPLES)
   add_subdirectory(examples/mcp_server)
   add_subdirectory(examples/stdio_smoke)
   add_subdirectory(examples/subscriptions_progress)
+  add_subdirectory(examples/typed_quickstart)
 endif()
 
 # Tests (to be implemented in a later step)

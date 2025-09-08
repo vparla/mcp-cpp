@@ -10,6 +10,7 @@
 #include "Transport.h"
 #include "JSONRPCTypes.h"
 #include "Protocol.h"
+#include "mcp/validation/Validation.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -278,6 +279,20 @@ public:
     //==========================================================================================================
     using ErrorHandler = std::function<void(const std::string& error)>;
     virtual void SetErrorHandler(ErrorHandler handler) = 0;
+
+    ////////////////////////////////////////// Validation (opt-in) /////////////////////////////////////////////
+    //==========================================================================================================
+    // Configures runtime schema validation for client-side request/response handling. Default: Off (no-op).
+    // Args:
+    //   mode: validation::ValidationMode::{Off, Strict}
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetValidationMode(validation::ValidationMode mode) = 0;
+    //==========================================================================================================
+    // Returns the current validation mode.
+    //==========================================================================================================
+    virtual validation::ValidationMode GetValidationMode() const = 0;
 };
 
 // Standard MCP Client implementation
@@ -330,6 +345,10 @@ public:
     void RemoveNotificationHandler(const std::string& method) override;
     void SetProgressHandler(ProgressHandler handler) override;
     void SetErrorHandler(ErrorHandler handler) override;
+
+    // Validation (opt-in)
+    void SetValidationMode(validation::ValidationMode mode) override;
+    validation::ValidationMode GetValidationMode() const override;
 
 private:
     class Impl;

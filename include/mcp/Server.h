@@ -8,6 +8,7 @@
 #pragma once
 
 #include "Protocol.h"
+#include "mcp/validation/Validation.h"
 #include "Transport.h"
 #include <memory>
 #include <functional>
@@ -401,6 +402,20 @@ public:
     //   (none)
     //==========================================================================================================
     virtual void SetCapabilities(const ServerCapabilities& capabilities) = 0;
+
+    ////////////////////////////////////////// Validation (opt-in) /////////////////////////////////////////////
+    //==========================================================================================================
+    // Configures runtime schema validation for server-side request/response handling. Default: Off (no-op).
+    // Args:
+    //   mode: validation::ValidationMode::{Off, Strict}
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetValidationMode(validation::ValidationMode mode) = 0;
+    //==========================================================================================================
+    // Returns the current validation mode.
+    //==========================================================================================================
+    virtual validation::ValidationMode GetValidationMode() const = 0;
 };
 
 // Standard MCP Server implementation
@@ -480,6 +495,10 @@ public:
     // Server capabilities
     ServerCapabilities GetCapabilities() const override;
     void SetCapabilities(const ServerCapabilities& capabilities) override;
+
+    // Validation (opt-in)
+    void SetValidationMode(validation::ValidationMode mode) override;
+    validation::ValidationMode GetValidationMode() const override;
 
 private:
     class Impl;

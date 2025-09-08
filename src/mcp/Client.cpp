@@ -15,6 +15,7 @@
 #include "mcp/async/Task.h"
 #include "mcp/async/FutureAwaitable.h"
 #include "mcp/errors/Errors.h"
+#include "mcp/validation/Validation.h"
 
 
 namespace mcp {
@@ -32,6 +33,7 @@ public:
     IClient::ProgressHandler progressHandler;
     IClient::ErrorHandler errorHandler;
     IClient::SamplingHandler samplingHandler;
+    validation::ValidationMode validationMode{validation::ValidationMode::Off};
 
     explicit Impl(const Implementation& info)
         : clientInfo(info) {
@@ -806,6 +808,17 @@ void Client::SetSamplingHandler(SamplingHandler handler) {
 void Client::SetErrorHandler(ErrorHandler handler) {
     FUNC_SCOPE();
     pImpl->errorHandler = std::move(handler);
+}
+
+// Validation (opt-in)
+void Client::SetValidationMode(validation::ValidationMode mode) {
+    FUNC_SCOPE();
+    pImpl->validationMode = mode;
+}
+
+validation::ValidationMode Client::GetValidationMode() const {
+    FUNC_SCOPE();
+    return pImpl->validationMode;
 }
 
 // Client factory implementation

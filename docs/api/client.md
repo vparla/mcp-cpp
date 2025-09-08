@@ -79,3 +79,15 @@ This page summarizes the public client APIs with signatures and brief descriptio
 - void SetProgressHandler(ProgressHandler handler)
 - using ErrorHandler = std::function<void(const std::string& error)>;
 - void SetErrorHandler(ErrorHandler handler)
+
+## Typed client wrappers
+
+For ergonomic helpers that return strongly-typed result structs and provide paging and content helpers, see:
+
+- [docs/api/typed.md](./typed.md)
+
+## Validation (opt-in)
+
+Client-side runtime shape validation can be enabled via the validation mode toggle (Off/Strict):
+
+- See API reference in [docs/api/validation.md](./validation.md)
