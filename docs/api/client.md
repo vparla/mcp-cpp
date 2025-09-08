@@ -91,3 +91,10 @@ For ergonomic helpers that return strongly-typed result structs and provide pagi
 Client-side runtime shape validation can be enabled via the validation mode toggle (Off/Strict):
 
 - See API reference in [docs/api/validation.md](./validation.md)
+
+## Listings cache (optional)
+
+- void SetListingsCacheTtlMs(const std::optional<uint64_t>& ttlMs)
+  - Enables or disables client-side caching for non-paged list endpoints (tools/resources/prompts/templates).
+  - When enabled with a positive TTL, consecutive calls within the TTL window are served from an in-memory cache.
+  - Caches are automatically invalidated on corresponding `notifications/*/list_changed`.

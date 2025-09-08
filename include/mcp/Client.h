@@ -293,6 +293,19 @@ public:
     // Returns the current validation mode.
     //==========================================================================================================
     virtual validation::ValidationMode GetValidationMode() const = 0;
+
+    ////////////////////////////////////////// Listings cache (optional) ////////////////////////////////////////
+    //==========================================================================================================
+    // Enables or disables client-side caching for non-paged list endpoints (tools/resources/prompts/templates).
+    // When enabled, consecutive calls within the specified TTL window return cached results and avoid a server
+    // request. Caches are automatically invalidated on notifications/*/list_changed.
+    // Args:
+    //   ttlMs: Optional TTL in milliseconds. When not set, caching is disabled. When set to 0, caching is
+    //          effectively disabled. Positive values enable caching.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetListingsCacheTtlMs(const std::optional<uint64_t>& ttlMs) = 0;
 };
 
 // Standard MCP Client implementation
@@ -349,6 +362,9 @@ public:
     // Validation (opt-in)
     void SetValidationMode(validation::ValidationMode mode) override;
     validation::ValidationMode GetValidationMode() const override;
+
+    // Listings cache (optional)
+    void SetListingsCacheTtlMs(const std::optional<uint64_t>& ttlMs) override;
 
 private:
     class Impl;

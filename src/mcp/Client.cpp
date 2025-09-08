@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <optional>
 #include <stdexcept>
+#include <mutex>
 
 #include "mcp/Client.h"
 #include "mcp/Protocol.h"
@@ -37,6 +38,14 @@ public:
     IClient::ErrorHandler errorHandler;
     IClient::SamplingHandler samplingHandler;
     validation::ValidationMode validationMode{validation::ValidationMode::Off};
+
+    // Listings cache (optional)
+    std::optional<uint64_t> listingsCacheTtlMs; // milliseconds; disabled when not set or == 0
+    std::mutex cacheMutex;
+    struct ToolsCache { std::vector<Tool> data; std::chrono::steady_clock::time_point ts; bool set{false}; } toolsCache;
+    struct ResourcesCache { std::vector<Resource> data; std::chrono::steady_clock::time_point ts; bool set{false}; } resourcesCache;
+    struct TemplatesCache { std::vector<ResourceTemplate> data; std::chrono::steady_clock::time_point ts; bool set{false}; } templatesCache;
+    struct PromptsCache { std::vector<Prompt> data; std::chrono::steady_clock::time_point ts; bool set{false}; } promptsCache;
 
     explicit Impl(const Implementation& info)
         : clientInfo(info) {
@@ -165,6 +174,18 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
                     if (this->progressHandler) this->progressHandler(token, progress, message);
                 }
             } else {
+                // Cache invalidation for list changes
+                if (n->method == Methods::ToolListChanged) {
+                    std::lock_guard<std::mutex> lk(this->cacheMutex);
+                    this->toolsCache.set = false;
+                } else if (n->method == Methods::ResourceListChanged) {
+                    std::lock_guard<std::mutex> lk(this->cacheMutex);
+                    this->resourcesCache.set = false;
+                    this->templatesCache.set = false; // templates likely impacted by resources changes
+                } else if (n->method == Methods::PromptListChanged) {
+                    std::lock_guard<std::mutex> lk(this->cacheMutex);
+                    this->promptsCache.set = false;
+                }
                 auto it = this->notificationHandlers.find(n->method);
                 if (it != this->notificationHandlers.end()) {
                     it->second(n->method, n->params.value_or(JSONValue{}));
@@ -363,6 +384,18 @@ mcp::async::Task<void> Client::Impl::coUnsubscribeResources(const std::optional<
 
 mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
     FUNC_SCOPE();
+    // Cache hit path
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        if (this->toolsCache.set) {
+            auto now = std::chrono::steady_clock::now();
+            auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - this->toolsCache.ts).count();
+            if (ageMs <= static_cast<int64_t>(this->listingsCacheTtlMs.value())) {
+                LOG_DEBUG("ListTools cache hit (ageMs={})", ageMs);
+                co_return this->toolsCache.data;
+            }
+        }
+    }
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListTools;
     LOG_DEBUG("Requesting tools list");
@@ -414,6 +447,13 @@ mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
             }
         }
     } catch (const std::exception& e) { LOG_ERROR("ListTools exception: {}", e.what()); throw; }
+    // Update cache on success
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->toolsCache.data = tools;
+        this->toolsCache.ts = std::chrono::steady_clock::now();
+        this->toolsCache.set = true;
+    }
     co_return tools;
 }
 
@@ -482,6 +522,17 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
 
 mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
     FUNC_SCOPE();
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        if (this->resourcesCache.set) {
+            auto now = std::chrono::steady_clock::now();
+            auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - this->resourcesCache.ts).count();
+            if (ageMs <= static_cast<int64_t>(this->listingsCacheTtlMs.value())) {
+                LOG_DEBUG("ListResources cache hit (ageMs={})", ageMs);
+                co_return this->resourcesCache.data;
+            }
+        }
+    }
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListResources;
     LOG_DEBUG("Requesting resources list");
@@ -534,6 +585,12 @@ mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
             }
         }
     } catch (const std::exception& e) { LOG_ERROR("ListResources exception: {}", e.what()); throw; }
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->resourcesCache.data = resources;
+        this->resourcesCache.ts = std::chrono::steady_clock::now();
+        this->resourcesCache.set = true;
+    }
     co_return resources;
 }
 
@@ -604,6 +661,17 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
 
 mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemplates() {
     FUNC_SCOPE();
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        if (this->templatesCache.set) {
+            auto now = std::chrono::steady_clock::now();
+            auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - this->templatesCache.ts).count();
+            if (ageMs <= static_cast<int64_t>(this->listingsCacheTtlMs.value())) {
+                LOG_DEBUG("ListResourceTemplates cache hit (ageMs={})", ageMs);
+                co_return this->templatesCache.data;
+            }
+        }
+    }
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListResourceTemplates;
     LOG_DEBUG("Requesting resource templates list");
@@ -656,6 +724,12 @@ mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemp
             }
         }
     } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplates exception: {}", e.what()); throw; }
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->templatesCache.data = templates;
+        this->templatesCache.ts = std::chrono::steady_clock::now();
+        this->templatesCache.set = true;
+    }
     co_return templates;
 }
 
@@ -726,6 +800,17 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
 
 mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
     FUNC_SCOPE();
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        if (this->promptsCache.set) {
+            auto now = std::chrono::steady_clock::now();
+            auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - this->promptsCache.ts).count();
+            if (ageMs <= static_cast<int64_t>(this->listingsCacheTtlMs.value())) {
+                LOG_DEBUG("ListPrompts cache hit (ageMs={})", ageMs);
+                co_return this->promptsCache.data;
+            }
+        }
+    }
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListPrompts;
     LOG_DEBUG("Requesting prompts list");
@@ -776,6 +861,12 @@ mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
             }
         }
     } catch (const std::exception& e) { LOG_ERROR("ListPrompts exception: {}", e.what()); throw; }
+    if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->promptsCache.data = prompts;
+        this->promptsCache.ts = std::chrono::steady_clock::now();
+        this->promptsCache.set = true;
+    }
     co_return prompts;
 }
 
@@ -1022,6 +1113,21 @@ void Client::SetSamplingHandler(SamplingHandler handler) {
 void Client::SetErrorHandler(ErrorHandler handler) {
     FUNC_SCOPE();
     pImpl->errorHandler = std::move(handler);
+}
+
+void Client::SetListingsCacheTtlMs(const std::optional<uint64_t>& ttlMs) {
+    FUNC_SCOPE();
+    // Normalize: disable when not set or <= 0
+    if (!ttlMs.has_value() || ttlMs.value() == 0) {
+        pImpl->listingsCacheTtlMs.reset();
+        std::lock_guard<std::mutex> lk(pImpl->cacheMutex);
+        pImpl->toolsCache.set = false;
+        pImpl->resourcesCache.set = false;
+        pImpl->templatesCache.set = false;
+        pImpl->promptsCache.set = false;
+        return;
+    }
+    pImpl->listingsCacheTtlMs = ttlMs;
 }
 
 // Validation (opt-in)
