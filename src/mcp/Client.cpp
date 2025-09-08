@@ -151,6 +151,14 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
                     if (mIt != o.end() && std::holds_alternative<std::string>(mIt->second->value)) {
                         message = std::get<std::string>(mIt->second->value);
                     }
+                    // Strict validation for progress
+                    if (this->validationMode == validation::ValidationMode::Strict) {
+                        bool ok = !token.empty() && (progress >= 0.0 && progress <= 1.0);
+                        if (!ok) {
+                            LOG_WARN("Dropping invalid progress notification under Strict mode");
+                            return;
+                        }
+                    }
                     if (this->progressHandler) this->progressHandler(token, progress, message);
                 }
             } else {

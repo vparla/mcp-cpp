@@ -15,6 +15,7 @@
 #include <cctype>
 #include <future>
 #include <stop_token>
+
 #include "mcp/Server.h"
 #include "mcp/Protocol.h"
 #include "logging/Logger.h"
@@ -22,6 +23,7 @@
 #include "mcp/async/FutureAwaitable.h"
 #include "mcp/errors/Errors.h"
 #include "mcp/validation/Validation.h"
+#include "mcp/validation/Validators.h"
 
 
 namespace mcp {
@@ -450,6 +452,13 @@ public:
             }
             result = fut.get();
         }
+        // Strict validation of handler result shape
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateCallToolResult(result)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid handler result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         // Check for cancellation after handler returns (mid-flight cancellation)
         if (token && token->cancelled.load()) {
             LOG_DEBUG("Cancellation detected after tool handler for id={}", idStr);
@@ -635,6 +644,13 @@ public:
             }
             content = rfut.get();
         }
+        // Strict validation of handler result shape
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateReadResourceResult(content)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid handler result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         // Check for cancellation after handler returns (mid-flight cancellation)
         if (token && token->cancelled.load()) {
             LOG_DEBUG("Cancellation detected after resource handler for id={}", idStr);
@@ -749,6 +765,13 @@ public:
         
         // Call the prompt handler
         PromptResult result = it->second(arguments);
+        // Strict validation of handler result shape
+        if (validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateGetPromptResult(result)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid handler result shape";
+                return errors::makeErrorResponse(request.id, e);
+            }
+        }
         
         JSONValue::Object resultObj;
         resultObj["description"] = std::make_shared<JSONValue>(result.description);

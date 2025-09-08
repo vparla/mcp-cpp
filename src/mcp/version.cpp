@@ -4,9 +4,10 @@
 // File: version.cpp
 // Purpose: Implements version helpers returning semantic version string.
 //==========================================================================================================
-#include "mcp/version.h"
 
 #include <sstream>
+
+#include "mcp/version.h"
 
 namespace mcp {
 

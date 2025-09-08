@@ -5,12 +5,13 @@
 // Purpose: Minimalistic JSON parser using only std library
 //==========================================================================================================
 
-#include "mcp/JSONRPCTypes.h"
-#include "logging/Logger.h"
 #include <sstream>
 #include <cctype>
 #include <stdexcept>
 #include <iomanip>
+#include "mcp/JSONRPCTypes.h"
+#include "logging/Logger.h"
+
 
 namespace mcp {
 
