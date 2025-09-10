@@ -5,22 +5,22 @@
 // Purpose: MCP server implementation
 //==========================================================================================================
 #include <algorithm>
-#include <functional>
-#include <unordered_set>
-#include <unordered_map>
-#include <memory>
-#include <thread>
-#include <chrono>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <functional>
 #include <future>
+#include <memory>
 #include <stop_token>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 
-#include "mcp/Server.h"
-#include "mcp/Protocol.h"
 #include "logging/Logger.h"
-#include "mcp/async/Task.h"
+#include "mcp/Protocol.h"
+#include "mcp/Server.h"
 #include "mcp/async/FutureAwaitable.h"
+#include "mcp/async/Task.h"
 #include "mcp/errors/Errors.h"
 #include "mcp/validation/Validation.h"
 #include "mcp/validation/Validators.h"
@@ -53,6 +53,18 @@ public:
     std::string serverInfo;
     std::atomic<bool> initialized{false};
     // (coroutine helper definitions appear after the class)
+    // Helper methods to keep request handling concise
+    // Cancellation token used for request cancellation tracking
+    struct CancellationToken { std::atomic<bool> cancelled{false}; };
+    std::unique_ptr<JSONRPCResponse> dispatchRequest(const JSONRPCRequest& req);
+    void sendInitializedAndListChangedAsync();
+    std::unique_ptr<JSONRPCResponse> handleCreateMessageRequest(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token);
+    std::unique_ptr<JSONRPCResponse> handleSubscribeRequest(const JSONRPCRequest& req);
+    std::unique_ptr<JSONRPCResponse> handleUnsubscribeRequest(const JSONRPCRequest& req);
+    // Paging + validation helpers (for list handlers)
+    void parsePagingParams(const JSONRPCRequest& request, size_t& start, std::optional<size_t>& limitOpt);
+    std::optional<std::string> computeNextCursor(size_t nextIndex, size_t total, const std::optional<size_t>& limitOpt);
+    bool validateListResultStrict(const JSONValue& result, const std::string& methodName, const std::string& arrayKey);
     std::function<void(const std::string&)> errorCallback;
     std::atomic<bool> resourcesSubscribed{false};
     std::unordered_set<std::string> subscribedUris; // per-URI subscriptions
@@ -78,7 +90,6 @@ public:
     validation::ValidationMode validationMode{validation::ValidationMode::Off};
 
     // Cancellation support
-    struct CancellationToken { std::atomic<bool> cancelled{false}; };
     std::mutex cancelMutex;
     std::unordered_map<std::string, std::shared_ptr<CancellationToken>> cancelMap;
     // Track stop_sources for cooperative cancellation of async handlers per request id
@@ -88,13 +99,259 @@ public:
         std::string idStr;
         std::visit([&](const auto& v){
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) { idStr = v; }
+            if constexpr (std::is_same_v<T, std::string>) { idStr = v;     }
             else if constexpr (std::is_same_v<T, int64_t>) { idStr = std::to_string(v); }
             else { idStr = ""; }
         }, id);
         return idStr;
     }
 
+    std::unique_ptr<JSONRPCResponse> handleToolsList(const JSONRPCRequest& req) {
+    LOG_DEBUG("Handling tools/list request");
+    size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
+    std::vector<Tool> tools;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        tools.reserve(this->toolMetadata.size());
+        for (const auto& [name, meta] : this->toolMetadata) tools.push_back(meta);
+    }
+    std::sort(tools.begin(), tools.end(), [](const Tool& a, const Tool& b){ return a.name < b.name; });
+    const size_t total = tools.size();
+    if (start > total) start = total;
+    const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
+
+    JSONValue::Object resultObj;
+    JSONValue::Array arr;
+    for (size_t i = start; i < end; ++i) {
+        const auto& t = tools[i];
+        JSONValue::Object to;
+        to["name"] = std::make_shared<JSONValue>(t.name);
+        to["description"] = std::make_shared<JSONValue>(t.description);
+        // inputSchema may be empty JSONValue
+        to["inputSchema"] = std::make_shared<JSONValue>(t.inputSchema);
+        arr.push_back(std::make_shared<JSONValue>(to));
+    }
+    resultObj["tools"] = std::make_shared<JSONValue>(arr);
+    auto next = computeNextCursor(end, total, limitOpt);
+    if (next.has_value()) {
+        resultObj["nextCursor"] = std::make_shared<JSONValue>(next.value());
+    }
+    JSONValue result{resultObj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateToolsListResultJson(result) || !validateListResultStrict(result, Methods::ListTools, "tools")) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid tools/list result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id; resp->result = result; return resp;
+}
+
+    std::unique_ptr<JSONRPCResponse> handleResourcesList(const JSONRPCRequest& req) {
+    LOG_DEBUG("Handling resources/list request");
+    size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
+    std::vector<Resource> resources;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        resources.reserve(this->resourceUris.size());
+        for (const auto& uri : this->resourceUris) resources.emplace_back(uri, std::string("Resource: ") + uri);
+    }
+    std::sort(resources.begin(), resources.end(), [](const Resource& a, const Resource& b){ return a.uri < b.uri; });
+    const size_t total = resources.size();
+    if (start > total) start = total;
+    const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
+
+    JSONValue::Object resultObj;
+    JSONValue::Array arr;
+    for (size_t i = start; i < end; ++i) {
+        const auto& r = resources[i];
+        JSONValue::Object ro;
+        ro["uri"] = std::make_shared<JSONValue>(r.uri);
+        ro["name"] = std::make_shared<JSONValue>(r.name);
+        if (r.description.has_value()) ro["description"] = std::make_shared<JSONValue>(r.description.value());
+        if (r.mimeType.has_value()) ro["mimeType"] = std::make_shared<JSONValue>(r.mimeType.value());
+        arr.push_back(std::make_shared<JSONValue>(ro));
+    }
+    resultObj["resources"] = std::make_shared<JSONValue>(arr);
+    auto next = computeNextCursor(end, total, limitOpt);
+    if (next.has_value()) {
+        resultObj["nextCursor"] = std::make_shared<JSONValue>(next.value());
+    }
+    JSONValue result{resultObj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateResourcesListResultJson(result) || !validateListResultStrict(result, Methods::ListResources, "resources")) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/list result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id; resp->result = result; return resp;
+}
+
+    std::unique_ptr<JSONRPCResponse> handleResourceTemplatesList(const JSONRPCRequest& req) {
+    LOG_DEBUG("Handling resources/templates/list request");
+    size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
+    std::vector<ResourceTemplate> templatesCopy;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        templatesCopy = this->resourceTemplates;
+    }
+    std::sort(templatesCopy.begin(), templatesCopy.end(), [](const ResourceTemplate& a, const ResourceTemplate& b){ return a.uriTemplate < b.uriTemplate; });
+    const size_t total = templatesCopy.size();
+    if (start > total) start = total;
+    const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
+
+    JSONValue::Object resultObj;
+    JSONValue::Array arr;
+    for (size_t i = start; i < end; ++i) {
+        const auto& rt = templatesCopy[i];
+        JSONValue::Object rto;
+        rto["uriTemplate"] = std::make_shared<JSONValue>(rt.uriTemplate);
+        rto["name"] = std::make_shared<JSONValue>(rt.name);
+        if (rt.description.has_value()) rto["description"] = std::make_shared<JSONValue>(rt.description.value());
+        if (rt.mimeType.has_value()) rto["mimeType"] = std::make_shared<JSONValue>(rt.mimeType.value());
+        arr.push_back(std::make_shared<JSONValue>(rto));
+    }
+    resultObj["resourceTemplates"] = std::make_shared<JSONValue>(arr);
+    auto next = computeNextCursor(end, total, limitOpt);
+    if (next.has_value()) {
+        resultObj["nextCursor"] = std::make_shared<JSONValue>(next.value());
+    }
+    JSONValue result{resultObj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateResourceTemplatesListResultJson(result) || !validateListResultStrict(result, Methods::ListResourceTemplates, "resourceTemplates")) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/templates/list result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id; resp->result = result; return resp;
+}
+
+    std::unique_ptr<JSONRPCResponse> handlePromptsList(const JSONRPCRequest& req) {
+    LOG_DEBUG("Handling prompts/list request");
+    size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
+    std::vector<std::string> names;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        names.reserve(this->promptHandlers.size());
+        for (const auto& kv : this->promptHandlers) names.push_back(kv.first);
+    }
+    std::sort(names.begin(), names.end());
+    const size_t total = names.size();
+    if (start > total) start = total;
+    const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
+
+    JSONValue::Object resultObj;
+    JSONValue::Array arr;
+    for (size_t i = start; i < end; ++i) {
+        const auto& name = names[i];
+        JSONValue::Object po;
+        po["name"] = std::make_shared<JSONValue>(name);
+        po["description"] = std::make_shared<JSONValue>(std::string("Prompt: ") + name);
+        arr.push_back(std::make_shared<JSONValue>(po));
+    }
+    resultObj["prompts"] = std::make_shared<JSONValue>(arr);
+    auto next = computeNextCursor(end, total, limitOpt);
+    if (next.has_value()) {
+        resultObj["nextCursor"] = std::make_shared<JSONValue>(next.value());
+    }
+    JSONValue result{resultObj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validatePromptsListResultJson(result) || !validateListResultStrict(result, Methods::ListPrompts, "prompts")) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid prompts/list result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id; resp->result = result; return resp;
+}
+
+    std::unique_ptr<JSONRPCResponse> handleToolsCall(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token) {
+    LOG_DEBUG("Handling tools/call request");
+    std::string name; JSONValue arguments;
+    if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(req.params->value);
+        auto it = o.find("name"); if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) name = std::get<std::string>(it->second->value);
+        auto ia = o.find("arguments"); if (ia != o.end() && ia->second) arguments = *(ia->second);
+    }
+    if (name.empty()) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; return errors::makeErrorResponse(req.id, e); }
+    ToolHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        auto it = this->toolHandlers.find(name);
+        if (it != this->toolHandlers.end()) handler = it->second;
+    }
+    if (!handler) { errors::McpError e; e.code = JSONRPCErrorCodes::ToolNotFound; e.message = "Tool not found"; return errors::makeErrorResponse(req.id, e); }
+
+    const std::string idStr = Impl::idToString(req.id);
+    auto src = this->registerStopSource(idStr);
+    struct SrcGuard { Server::Impl* self; std::string id; std::shared_ptr<std::stop_source> s; ~SrcGuard(){ if (self) self->unregisterStopSource(id, s); } } guard{this, idStr, src};
+
+    ToolResult tr;
+    try {
+        auto fut = handler(arguments, src->get_token());
+        tr = fut.get();
+    } catch (const std::exception& e) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+    }
+    if (token && token->cancelled.load()) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+    }
+    JSONValue::Object obj;
+    JSONValue::Array content;
+    for (auto& v : tr.content) content.push_back(std::make_shared<JSONValue>(std::move(v)));
+    obj["content"] = std::make_shared<JSONValue>(content);
+    obj["isError"] = std::make_shared<JSONValue>(tr.isError);
+    JSONValue result{obj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateCallToolResultJson(result)) {
+            LOG_ERROR("Validation failed (Strict): {} result invalid (server)", Methods::CallTool);
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid tool result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>(); resp->id = req.id; resp->result = result; return resp;
+}
+
+    std::unique_ptr<JSONRPCResponse> handleResourcesRead(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token) {
+    LOG_DEBUG("Handling resources/read request");
+    std::string uri;
+    if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(req.params->value);
+        auto it = o.find("uri"); if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) uri = std::get<std::string>(it->second->value);
+    }
+    if (uri.empty()) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; return errors::makeErrorResponse(req.id, e); }
+    ResourceHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+        auto it = this->resourceHandlers.find(uri);
+        if (it != this->resourceHandlers.end()) handler = it->second;
+    }
+    if (!handler) { errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found"; return errors::makeErrorResponse(req.id, e); }
+
+    const std::string idStr = Impl::idToString(req.id);
+    auto src = this->registerStopSource(idStr);
+    struct SrcGuard2 { Server::Impl* self; std::string id; std::shared_ptr<std::stop_source> s; ~SrcGuard2(){ if (self) self->unregisterStopSource(id, s); } } guard{this, idStr, src};
+
+    ReadResourceResult rr;
+    try {
+        auto fut = handler(uri, src->get_token());
+        rr = fut.get();
+    } catch (const std::exception& e) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+    }
+    if (token && token->cancelled.load()) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+    }
+    JSONValue::Object obj;
+    JSONValue::Array contents;
+    for (auto& v : rr.contents) contents.push_back(std::make_shared<JSONValue>(std::move(v)));
+    obj["contents"] = std::make_shared<JSONValue>(contents);
+    JSONValue result{obj};
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateReadResourceResultJson(result)) {
+            LOG_ERROR("Validation failed (Strict): {} result invalid (server)", Methods::ReadResource);
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resource read result shape"; return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>(); resp->id = req.id; resp->result = result; return resp;
+}
     std::shared_ptr<CancellationToken> registerCancelToken(const std::string& idStr) {
         if (idStr.empty()) return std::make_shared<CancellationToken>();
         std::lock_guard<std::mutex> lk(cancelMutex);
@@ -323,493 +580,6 @@ public:
         auto response = std::make_unique<JSONRPCResponse>();
         response->id = request.id;
         response->result = result;
-        
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handleToolsList(const JSONRPCRequest& request) {
-        LOG_DEBUG("Handling tools/list request");
-        
-        // Parse optional paging params
-        size_t start = 0;
-        std::optional<size_t> limitOpt;
-        if (request.params.has_value() && std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& o = std::get<JSONValue::Object>(request.params->value);
-            auto it = o.find("cursor");
-            if (it != o.end()) {
-                if (std::holds_alternative<std::string>(it->second->value)) {
-                    try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
-                } else if (std::holds_alternative<int64_t>(it->second->value)) {
-                    start = static_cast<size_t>(std::get<int64_t>(it->second->value));
-                }
-            }
-            it = o.find("limit");
-            if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
-                auto lim = std::get<int64_t>(it->second->value);
-                if (lim > 0) limitOpt = static_cast<size_t>(lim);
-            }
-        }
-        
-        std::lock_guard<std::mutex> lock(registryMutex);
-        
-        // Gather tools (from metadata) into a stable vector for paging to include sync and async tools
-        std::vector<std::string> names;
-        names.reserve(toolMetadata.size());
-        for (const auto& [name, _] : toolMetadata) names.push_back(name);
-        std::sort(names.begin(), names.end());
-        
-        JSONValue::Array toolsArray;
-        size_t total = names.size();
-        size_t count = 0;
-        size_t i = start < total ? start : total;
-        for (; i < total; ++i) {
-            if (limitOpt.has_value() && count >= *limitOpt) break;
-            const auto& name = names[i];
-            JSONValue::Object toolObj;
-            toolObj["name"] = std::make_shared<JSONValue>(name);
-            auto mdIt = toolMetadata.find(name);
-            if (mdIt != toolMetadata.end()) {
-                toolObj["description"] = std::make_shared<JSONValue>(mdIt->second.description);
-                toolObj["inputSchema"] = std::make_shared<JSONValue>(mdIt->second.inputSchema);
-            } else {
-                toolObj["description"] = std::make_shared<JSONValue>(std::string("Tool: ") + name);
-                JSONValue::Object inputSchema;
-                inputSchema["type"] = std::make_shared<JSONValue>("object");
-                inputSchema["properties"] = std::make_shared<JSONValue>(JSONValue::Object{});
-                toolObj["inputSchema"] = std::make_shared<JSONValue>(inputSchema);
-            }
-            toolsArray.push_back(std::make_shared<JSONValue>(toolObj));
-            ++count;
-        }
-        
-        JSONValue::Object resultObj;
-        resultObj["tools"] = std::make_shared<JSONValue>(toolsArray);
-        if (limitOpt.has_value() && i < total) {
-            resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
-        }
-        JSONValue result(resultObj);
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validateToolsListResultJson(result)) {
-                size_t items = 0; bool hasNext = false; std::string nextType;
-                if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                    const auto& o = std::get<JSONValue::Object>(result.value);
-                    auto itArr = o.find("tools");
-                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
-                        items = std::get<JSONValue::Array>(itArr->second->value).size();
-                    }
-                    auto itNc = o.find("nextCursor");
-                    hasNext = (itNc != o.end());
-                    if (hasNext) {
-                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
-                    }
-                }
-                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListTools, items, hasNext, nextType);
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid tools/list result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = result;
-        
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handleToolsCall(const JSONRPCRequest& request,
-                                                     const std::shared_ptr<CancellationToken>& token) {
-        LOG_DEBUG("Handling tools/call request");
-        
-        if (!request.params.has_value()) {
-            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
-            return errors::makeErrorResponse(request.id, e);
-        }
-        
-        std::string toolName;
-        JSONValue arguments;
-        
-        if (std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& paramsObj = std::get<JSONValue::Object>(request.params->value);
-            
-            auto nameIt = paramsObj.find("name");
-            if (nameIt != paramsObj.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                toolName = std::get<std::string>(nameIt->second->value);
-            }
-            
-            auto argsIt = paramsObj.find("arguments");
-            if (argsIt != paramsObj.end()) {
-                arguments = *argsIt->second;
-            }
-        }
-        
-        // Early cancellation state before invoking handler
-        const std::string idStr = idToString(request.id);
-        const bool preCancelled = (token && token->cancelled.load());
-        
-        ToolHandler handlerCopy;
-        {
-            std::lock_guard<std::mutex> lock(registryMutex);
-            auto it = toolHandlers.find(toolName);
-            if (it == toolHandlers.end()) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::ToolNotFound; e.message = "Tool not found";
-                return errors::makeErrorResponse(request.id, e);
-            }
-            handlerCopy = it->second;
-        }
-        
-        // Invoke async handler with stop_token for cooperative cancellation
-        ToolResult result;
-        {
-            auto stopSrc = registerStopSource(idStr);
-            // If cancellation arrived before the handler was invoked, request stop immediately
-            if (preCancelled) { try { stopSrc->request_stop(); } catch (...) {} }
-            struct StopGuard { Impl* impl; std::string id; std::shared_ptr<std::stop_source> src; ~StopGuard(){ if (impl && src) impl->unregisterStopSource(id, src); } } stopGuard{ this, idStr, stopSrc };
-            auto fut = handlerCopy(arguments, stopSrc->get_token());
-            if (preCancelled) {
-                // Return cancelled immediately but allow cooperative handler to observe stop and exit.
-                std::thread([f = std::move(fut)]() mutable { try { f.wait(); } catch (...) {} }).detach();
-                return CreateErrorResponse(request.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-            }
-            result = fut.get();
-        }
-        // Strict validation of handler result shape
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validateCallToolResult(result)) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid handler result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        // Check for cancellation after handler returns (mid-flight cancellation)
-        if (token && token->cancelled.load()) {
-            LOG_DEBUG("Cancellation detected after tool handler for id={}", idStr);
-            return CreateErrorResponse(request.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-        }
-        
-        JSONValue::Object resultObj;
-        resultObj["isError"] = std::make_shared<JSONValue>(result.isError);
-        JSONValue::Array contentArray;
-        if (!result.content.empty()) {
-            for (auto& v : result.content) {
-                contentArray.push_back(std::make_shared<JSONValue>(std::move(v)));
-            }
-        } else {
-            JSONValue::Object contentObj;
-            contentObj["type"] = std::make_shared<JSONValue>(std::string("text"));
-            contentObj["text"] = std::make_shared<JSONValue>(std::string("Error"));
-            contentArray.push_back(std::make_shared<JSONValue>(contentObj));
-        }
-        resultObj["content"] = std::make_shared<JSONValue>(contentArray);
-        
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = JSONValue{resultObj};
-        
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handleResourcesList(const JSONRPCRequest& request) {
-        LOG_DEBUG("Handling resources/list request");
-        
-        // Parse optional paging params
-        size_t start = 0;
-        std::optional<size_t> limitOpt;
-        if (request.params.has_value() && std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& o = std::get<JSONValue::Object>(request.params->value);
-            auto it = o.find("cursor");
-            if (it != o.end()) {
-                if (std::holds_alternative<std::string>(it->second->value)) {
-                    try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
-                } else if (std::holds_alternative<int64_t>(it->second->value)) {
-                    start = static_cast<size_t>(std::get<int64_t>(it->second->value));
-                }
-            }
-            it = o.find("limit");
-            if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
-                auto lim = std::get<int64_t>(it->second->value);
-                if (lim > 0) limitOpt = static_cast<size_t>(lim);
-            }
-        }
-        
-        std::lock_guard<std::mutex> lock(registryMutex);
-        
-        JSONValue::Array resourcesArray;
-        size_t total = resourceUris.size();
-        size_t count = 0;
-        size_t i = start < total ? start : total;
-        for (; i < total; ++i) {
-            if (limitOpt.has_value() && count >= *limitOpt) break;
-            const auto& uri = resourceUris[i];
-            JSONValue::Object resourceObj;
-            resourceObj["uri"] = std::make_shared<JSONValue>(uri);
-            resourceObj["name"] = std::make_shared<JSONValue>(uri);
-            resourceObj["description"] = std::make_shared<JSONValue>(std::string("Resource: ") + uri);
-            resourceObj["mimeType"] = std::make_shared<JSONValue>(std::string("text/plain"));
-            resourcesArray.push_back(std::make_shared<JSONValue>(resourceObj));
-            ++count;
-        }
-        
-        JSONValue::Object resultObj;
-        resultObj["resources"] = std::make_shared<JSONValue>(resourcesArray);
-        if (limitOpt.has_value() && i < total) {
-            resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
-        }
-        JSONValue result(resultObj);
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validateResourcesListResultJson(result)) {
-                size_t items = 0; bool hasNext = false; std::string nextType;
-                if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                    const auto& o = std::get<JSONValue::Object>(result.value);
-                    auto itArr = o.find("resources");
-                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
-                        items = std::get<JSONValue::Array>(itArr->second->value).size();
-                    }
-                    auto itNc = o.find("nextCursor");
-                    hasNext = (itNc != o.end());
-                    if (hasNext) {
-                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
-                    }
-                }
-                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResources, items, hasNext, nextType);
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/list result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = result;
-        
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handleResourceTemplatesList(const JSONRPCRequest& request) {
-        LOG_DEBUG("Handling resources/templates/list request");
-
-        // Parse optional paging params
-        size_t start = 0;
-        std::optional<size_t> limitOpt;
-        if (request.params.has_value() && std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& o = std::get<JSONValue::Object>(request.params->value);
-            auto it = o.find("cursor");
-            if (it != o.end()) {
-                if (std::holds_alternative<std::string>(it->second->value)) {
-                    try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
-                } else if (std::holds_alternative<int64_t>(it->second->value)) {
-                    start = static_cast<size_t>(std::get<int64_t>(it->second->value));
-                }
-            }
-            it = o.find("limit");
-            if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
-                auto lim = std::get<int64_t>(it->second->value);
-                if (lim > 0) limitOpt = static_cast<size_t>(lim);
-            }
-        }
-
-        std::lock_guard<std::mutex> lock(registryMutex);
-
-        JSONValue::Array templatesArray;
-        size_t total = resourceTemplates.size();
-        size_t count = 0;
-        size_t i = start < total ? start : total;
-        for (; i < total; ++i) {
-            if (limitOpt.has_value() && count >= *limitOpt) break;
-            const auto& rt = resourceTemplates[i];
-            JSONValue::Object obj;
-            obj["uriTemplate"] = std::make_shared<JSONValue>(rt.uriTemplate);
-            obj["name"] = std::make_shared<JSONValue>(rt.name);
-            if (rt.description.has_value()) {
-                obj["description"] = std::make_shared<JSONValue>(rt.description.value());
-            }
-            if (rt.mimeType.has_value()) {
-                obj["mimeType"] = std::make_shared<JSONValue>(rt.mimeType.value());
-            }
-            templatesArray.push_back(std::make_shared<JSONValue>(obj));
-            ++count;
-        }
-
-        JSONValue::Object resultObj;
-        resultObj["resourceTemplates"] = std::make_shared<JSONValue>(templatesArray);
-        if (limitOpt.has_value() && i < total) {
-            resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
-        }
-        // Strict validation of response shape
-        JSONValue result{resultObj};
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validateResourceTemplatesListResultJson(result)) {
-                size_t items = 0; bool hasNext = false; std::string nextType;
-                if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                    const auto& o = std::get<JSONValue::Object>(result.value);
-                    auto itArr = o.find("resourceTemplates");
-                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
-                        items = std::get<JSONValue::Array>(itArr->second->value).size();
-                    }
-                    auto itNc = o.find("nextCursor");
-                    hasNext = (itNc != o.end());
-                    if (hasNext) {
-                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
-                    }
-                }
-                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListResourceTemplates, items, hasNext, nextType);
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resources/templates/list result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = result;
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handleResourcesRead(const JSONRPCRequest& request,
-                                                         const std::shared_ptr<CancellationToken>& token) {
-        LOG_DEBUG("Handling resources/read request");
-        
-        if (!request.params.has_value()) {
-            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
-            return errors::makeErrorResponse(request.id, e);
-        }
-        
-        std::string uri;
-        if (std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& paramsObj = std::get<JSONValue::Object>(request.params->value);
-            auto uriIt = paramsObj.find("uri");
-            if (uriIt != paramsObj.end() && std::holds_alternative<std::string>(uriIt->second->value)) {
-                uri = std::get<std::string>(uriIt->second->value);
-            }
-        }
-        
-        // Early cancellation state before invoking handler
-        const std::string idStr = idToString(request.id);
-        const bool preCancelled = (token && token->cancelled.load());
-        
-        ResourceHandler handlerCopy;
-        {
-            std::lock_guard<std::mutex> lock(registryMutex);
-            auto it = resourceHandlers.find(uri);
-            if (it == resourceHandlers.end()) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found";
-                return errors::makeErrorResponse(request.id, e);
-            }
-            handlerCopy = it->second;
-        }
-        
-        // Invoke async handler with stop_token for cooperative cancellation
-        ResourceContent content;
-        {
-            auto stopSrc = registerStopSource(idStr);
-            if (preCancelled) { try { stopSrc->request_stop(); } catch (...) {} }
-            struct StopGuard { Impl* impl; std::string id; std::shared_ptr<std::stop_source> src; ~StopGuard(){ if (impl && src) impl->unregisterStopSource(id, src); } } stopGuard{ this, idStr, stopSrc };
-            auto rfut = handlerCopy(uri, stopSrc->get_token());
-            if (preCancelled) {
-                std::thread([f = std::move(rfut)]() mutable { try { f.wait(); } catch (...) {} }).detach();
-                return CreateErrorResponse(request.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-            }
-            content = rfut.get();
-        }
-        // Strict validation of handler result shape
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validateReadResourceResult(content)) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid handler result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        // Check for cancellation after handler returns (mid-flight cancellation)
-        if (token && token->cancelled.load()) {
-            LOG_DEBUG("Cancellation detected after resource handler for id={}", idStr);
-            return CreateErrorResponse(request.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-        }
-        
-        JSONValue::Object resultObj;
-        JSONValue::Array contentsArray;
-        for (auto& v : content.contents) {
-            contentsArray.push_back(std::make_shared<JSONValue>(std::move(v)));
-        }
-        resultObj["contents"] = std::make_shared<JSONValue>(contentsArray);
-        
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = JSONValue{resultObj};
-        
-        return response;
-    }
-
-    std::unique_ptr<JSONRPCResponse> handlePromptsList(const JSONRPCRequest& request) {
-        LOG_DEBUG("Handling prompts/list request");
-        
-        // Parse optional paging params
-        size_t start = 0;
-        std::optional<size_t> limitOpt;
-        if (request.params.has_value() && std::holds_alternative<JSONValue::Object>(request.params->value)) {
-            const auto& o = std::get<JSONValue::Object>(request.params->value);
-            auto it = o.find("cursor");
-            if (it != o.end()) {
-                if (std::holds_alternative<std::string>(it->second->value)) {
-                    try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
-                } else if (std::holds_alternative<int64_t>(it->second->value)) {
-                    start = static_cast<size_t>(std::get<int64_t>(it->second->value));
-                }
-            }
-            it = o.find("limit");
-            if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
-                auto lim = std::get<int64_t>(it->second->value);
-                if (lim > 0) limitOpt = static_cast<size_t>(lim);
-            }
-        }
-        
-        std::lock_guard<std::mutex> lock(registryMutex);
-        
-        // Stable ordering: sort names
-        std::vector<std::string> names;
-        names.reserve(promptHandlers.size());
-        for (const auto& [name, _] : promptHandlers) names.push_back(name);
-        std::sort(names.begin(), names.end());
-        
-        JSONValue::Array promptsArray;
-        size_t total = names.size();
-        size_t count = 0;
-        size_t i = start < total ? start : total;
-        for (; i < total; ++i) {
-            if (limitOpt.has_value() && count >= *limitOpt) break;
-            const auto& name = names[i];
-            JSONValue::Object promptObj;
-            promptObj["name"] = std::make_shared<JSONValue>(name);
-            promptObj["description"] = std::make_shared<JSONValue>(std::string("Prompt: ") + name);
-            promptObj["arguments"] = std::make_shared<JSONValue>(JSONValue::Array{});
-            promptsArray.push_back(std::make_shared<JSONValue>(promptObj));
-            ++count;
-        }
-        
-        JSONValue::Object resultObj;
-        resultObj["prompts"] = std::make_shared<JSONValue>(promptsArray);
-        if (limitOpt.has_value() && i < total) {
-            resultObj["nextCursor"] = std::make_shared<JSONValue>(std::to_string(i));
-        }
-        JSONValue result(resultObj);
-        if (validationMode == validation::ValidationMode::Strict) {
-            if (!validation::validatePromptsListResultJson(result)) {
-                size_t items = 0; bool hasNext = false; std::string nextType;
-                if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                    const auto& o = std::get<JSONValue::Object>(result.value);
-                    auto itArr = o.find("prompts");
-                    if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
-                        items = std::get<JSONValue::Array>(itArr->second->value).size();
-                    }
-                    auto itNc = o.find("nextCursor");
-                    hasNext = (itNc != o.end());
-                    if (hasNext) {
-                        nextType = std::holds_alternative<std::string>(itNc->second->value) ? "string" : (std::holds_alternative<int64_t>(itNc->second->value) ? "int" : "other");
-                    }
-                }
-                LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", Methods::ListPrompts, items, hasNext, nextType);
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid prompts/list result shape";
-                return errors::makeErrorResponse(request.id, e);
-            }
-        }
-        
-        auto response = std::make_unique<JSONRPCResponse>();
-        response->id = request.id;
-        response->result = result;
-        
         return response;
     }
 
@@ -896,182 +666,265 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
     });
 
     this->transport->SetRequestHandler([this](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        try {
-            const std::string idStr = Impl::idToString(req.id);
-            // Register cancellation token for this request and auto-unregister on exit
-            auto token = this->registerCancelToken(idStr);
-            struct ScopeGuard { std::function<void()> f; ~ScopeGuard(){ if (f) f(); } } guard{ [this, idStr](){ this->unregisterCancelToken(idStr); } };
-            if (req.method == Methods::Initialize) {
-                auto resp = this->handleInitialize(req);
-                // Send notifications/initialized asynchronously
-                std::thread([this]() {
-                    auto note = std::make_unique<JSONRPCNotification>();
-                    note->method = Methods::Initialized;
-                    note->params = JSONValue{JSONValue::Object{}};
-                    (void)this->transport->SendNotification(std::move(note));
-                    // Broadcast initial list_changed notifications so clients learn current state
-                    {
-                        auto n = std::make_unique<JSONRPCNotification>();
-                        n->method = Methods::ToolListChanged;
-                        n->params = JSONValue{JSONValue::Object{}};
-                        (void)this->transport->SendNotification(std::move(n));
-                    }
-                    {
-                        auto n = std::make_unique<JSONRPCNotification>();
-                        n->method = Methods::ResourceListChanged;
-                        n->params = JSONValue{JSONValue::Object{}};
-                        (void)this->transport->SendNotification(std::move(n));
-                    }
-                    {
-                        auto n = std::make_unique<JSONRPCNotification>();
-                        n->method = Methods::PromptListChanged;
-                        n->params = JSONValue{JSONValue::Object{}};
-                        (void)this->transport->SendNotification(std::move(n));
-                    }
-                }).detach();
-                return resp;
-            } else if (req.method == Methods::ListTools) {
-                return this->handleToolsList(req);
-            } else if (req.method == Methods::CallTool) {
-                auto r = this->handleToolsCall(req, token);
-                if (token && token->cancelled.load()) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-                }
-                return r;
-            } else if (req.method == Methods::ListResources) {
-                return this->handleResourcesList(req);
-            } else if (req.method == Methods::ListResourceTemplates) {
-                return this->handleResourceTemplatesList(req);
-            } else if (req.method == Methods::Subscribe) {
-                // Subscribe to a specific URI if provided
-                this->resourcesSubscribed = true;
-                if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
-                    const auto& o = std::get<JSONValue::Object>(req.params->value);
-                    auto it = o.find("uri");
-                    if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
-                        const std::string& uri = std::get<std::string>(it->second->value);
-                        std::lock_guard<std::mutex> lk(this->registryMutex);
-                        this->subscribedUris.insert(uri);
-                    }
-                }
-                auto resp = std::make_unique<JSONRPCResponse>();
-                resp->id = req.id;
-                resp->result = JSONValue{JSONValue::Object{}};
-                return resp;
-            } else if (req.method == Methods::Unsubscribe) {
-                // Unsubscribe from a specific URI if provided; if none, clear all
-                if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
-                    const auto& o = std::get<JSONValue::Object>(req.params->value);
-                    auto it = o.find("uri");
-                    if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
-                        const std::string& uri = std::get<std::string>(it->second->value);
-                        std::lock_guard<std::mutex> lk(this->registryMutex);
-                        this->subscribedUris.erase(uri);
-                    } else {
-                        std::lock_guard<std::mutex> lk(this->registryMutex);
-                        this->subscribedUris.clear();
-                    }
-                } else {
-                    std::lock_guard<std::mutex> lk(this->registryMutex);
-                    this->subscribedUris.clear();
-                }
-                // If no URIs remain, consider overall subscription off
-                this->resourcesSubscribed = !this->subscribedUris.empty();
-                auto resp = std::make_unique<JSONRPCResponse>();
-                resp->id = req.id;
-                resp->result = JSONValue{JSONValue::Object{}};
-                return resp;
-            } else if (req.method == Methods::CreateMessage) {
-                // Client-initiated sampling request to the server (if supported)
-                if (!this->samplingHandler) {
-                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No server sampling handler registered";
-                    return errors::makeErrorResponse(req.id, e);
-                }
-                JSONValue messages; JSONValue modelPreferences; JSONValue systemPrompt; JSONValue includeContext;
-                if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
-                    const auto& o = std::get<JSONValue::Object>(req.params->value);
-                    auto it = o.find("messages"); if (it != o.end()) messages = *it->second;
-                    it = o.find("modelPreferences"); if (it != o.end()) modelPreferences = *it->second;
-                    it = o.find("systemPrompt"); if (it != o.end()) systemPrompt = *it->second;
-                    it = o.find("includeContext"); if (it != o.end()) includeContext = *it->second;
-                }
-                // Strict validation of incoming params
-                if (this->validationMode == validation::ValidationMode::Strict) {
-                    JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
-                    if (!validation::validateCreateMessageParamsJson(paramsVal)) {
-                        bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
-                        size_t messagesCount = 0;
-                        if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
-                            const auto& po = std::get<JSONValue::Object>(paramsVal.value);
-                            auto itP = po.find("messages");
-                            hasMessages = (itP != po.end());
-                            if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
-                                messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
-                            }
-                            hasModelPreferences = (po.find("modelPreferences") != po.end());
-                            hasSystemPrompt = (po.find("systemPrompt") != po.end());
-                            hasIncludeContext = (po.find("includeContext") != po.end());
-                        }
-                        LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={} (server)",
-                                  Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
-                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
-                        return errors::makeErrorResponse(req.id, e);
-                    }
-                }
-                auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
-                JSONValue result = fut.get();
-                if (token && token->cancelled.load()) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-                }
-                // Strict validation of handler result
-                if (this->validationMode == validation::ValidationMode::Strict) {
-                    if (!validation::validateCreateMessageResultJson(result)) {
-                        bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
-                        if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                            const auto& ro = std::get<JSONValue::Object>(result.value);
-                            auto itM = ro.find("model"); hasModel = (itM != ro.end());
-                            auto itR = ro.find("role"); hasRole = (itR != ro.end());
-                            auto itC = ro.find("content");
-                            if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
-                                hasContentArray = true;
-                                contentCount = std::get<JSONValue::Array>(itC->second->value).size();
-                            }
-                        }
-                        LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={} (server)",
-                                  Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
-                        errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
-                        return errors::makeErrorResponse(req.id, e);
-                    }
-                }
-                auto resp = std::make_unique<JSONRPCResponse>();
-                resp->id = req.id;
-                resp->result = result;
-                return resp;
-            } else if (req.method == Methods::ReadResource) {
-                auto r = this->handleResourcesRead(req, token);
-                if (token && token->cancelled.load()) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-                }
-                return r;
-            } else if (req.method == Methods::ListPrompts) {
-                return this->handlePromptsList(req);
-            } else if (req.method == Methods::GetPrompt) {
-                auto r = this->handlePromptsGet(req);
-                if (token && token->cancelled.load()) {
-                    return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
-                }
-                return r;
-            }
-            { errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; return errors::makeErrorResponse(req.id, e); }
-        } catch (const std::exception& e) {
-            return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
-        }
+        return this->dispatchRequest(req);
     });
 
     auto fut = this->transport->Start();
     try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); }
     catch (const std::exception& e) { LOG_ERROR("Server start exception: {}", e.what()); }
     co_return;
+}
+
+//================================ Helper method definitions =================================
+std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequest& req) {
+    try {
+        const std::string idStr = Impl::idToString(req.id);
+        auto token = this->registerCancelToken(idStr);
+        struct ScopeGuard { std::function<void()> f; ~ScopeGuard(){ if (f) f(); } } guard{ [this, idStr](){ this->unregisterCancelToken(idStr); } };
+
+        if (req.method == Methods::Initialize) {
+            auto resp = this->handleInitialize(req);
+            this->sendInitializedAndListChangedAsync();
+            return resp;
+        } else if (req.method == Methods::ListTools) {
+            return this->handleToolsList(req);
+        } else if (req.method == Methods::CallTool) {
+            auto r = this->handleToolsCall(req, token);
+            if (token && token->cancelled.load()) {
+                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+            }
+            return r;
+        } else if (req.method == Methods::ListResources) {
+            return this->handleResourcesList(req);
+        } else if (req.method == Methods::ListResourceTemplates) {
+            return this->handleResourceTemplatesList(req);
+        } else if (req.method == Methods::Subscribe) {
+            return this->handleSubscribeRequest(req);
+        } else if (req.method == Methods::Unsubscribe) {
+            return this->handleUnsubscribeRequest(req);
+        } else if (req.method == Methods::CreateMessage) {
+            return this->handleCreateMessageRequest(req, token);
+        } else if (req.method == Methods::ReadResource) {
+            auto r = this->handleResourcesRead(req, token);
+            if (token && token->cancelled.load()) {
+                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+            }
+            return r;
+        } else if (req.method == Methods::ListPrompts) {
+            return this->handlePromptsList(req);
+        } else if (req.method == Methods::GetPrompt) {
+            auto r = this->handlePromptsGet(req);
+            if (token && token->cancelled.load()) {
+                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+            }
+            return r;
+        }
+        { errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; return errors::makeErrorResponse(req.id, e); }
+    } catch (const std::exception& e) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+    }
+}
+
+void Server::Impl::sendInitializedAndListChangedAsync() {
+    std::thread([this]() {
+        try {
+            auto note = std::make_unique<JSONRPCNotification>();
+            note->method = Methods::Initialized;
+            note->params = JSONValue{JSONValue::Object{}};
+            (void)this->transport->SendNotification(std::move(note));
+            {
+                auto n = std::make_unique<JSONRPCNotification>();
+                n->method = Methods::ToolListChanged;
+                n->params = JSONValue{JSONValue::Object{}};
+                (void)this->transport->SendNotification(std::move(n));
+            }
+            {
+                auto n = std::make_unique<JSONRPCNotification>();
+                n->method = Methods::ResourceListChanged;
+                n->params = JSONValue{JSONValue::Object{}};
+                (void)this->transport->SendNotification(std::move(n));
+            }
+            {
+                auto n = std::make_unique<JSONRPCNotification>();
+                n->method = Methods::PromptListChanged;
+                n->params = JSONValue{JSONValue::Object{}};
+                (void)this->transport->SendNotification(std::move(n));
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Initialized/list_changed async send exception: {}", e.what());
+        }
+    }).detach();
+}
+
+// Common helpers for paging and strict validation (used by list handlers)
+void Server::Impl::parsePagingParams(const JSONRPCRequest& request, size_t& start, std::optional<size_t>& limitOpt) {
+    start = 0;
+    limitOpt.reset();
+    if (request.params.has_value() && std::holds_alternative<JSONValue::Object>(request.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(request.params->value);
+        auto it = o.find("cursor");
+        if (it != o.end()) {
+            if (std::holds_alternative<std::string>(it->second->value)) {
+                try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
+            } else if (std::holds_alternative<int64_t>(it->second->value)) {
+                start = static_cast<size_t>(std::get<int64_t>(it->second->value));
+            }
+        }
+        it = o.find("limit");
+        if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
+            auto lim = std::get<int64_t>(it->second->value);
+            if (lim > 0) limitOpt = static_cast<size_t>(lim);
+        }
+    }
+}
+
+std::optional<std::string> Server::Impl::computeNextCursor(size_t nextIndex, size_t total, const std::optional<size_t>& limitOpt) {
+    if (limitOpt.has_value() && nextIndex < total) {
+        return std::to_string(nextIndex);
+    }
+    return std::nullopt;
+}
+
+bool Server::Impl::validateListResultStrict(const JSONValue& result, const std::string& methodName, const std::string& arrayKey) {
+    size_t items = 0; bool hasNext = false; std::string nextType;
+    bool ok = true;
+    if (std::holds_alternative<JSONValue::Object>(result.value)) {
+        const auto& o = std::get<JSONValue::Object>(result.value);
+        auto itArr = o.find(arrayKey);
+        if (itArr != o.end() && std::holds_alternative<JSONValue::Array>(itArr->second->value)) {
+            items = std::get<JSONValue::Array>(itArr->second->value).size();
+        } else {
+            ok = false;
+        }
+        auto itNc = o.find("nextCursor");
+        hasNext = (itNc != o.end());
+        if (hasNext) {
+            if (std::holds_alternative<std::string>(itNc->second->value)) {
+                nextType = "string";
+            } else if (std::holds_alternative<int64_t>(itNc->second->value)) {
+                // For sanity, we require string; track type for logging
+                nextType = "int";
+                ok = false;
+            } else {
+                nextType = "other";
+                ok = false;
+            }
+        }
+    } else {
+        ok = false;
+    }
+    if (!ok) {
+        LOG_ERROR("Validation failed (Strict): {} result invalid | items={} hasNextCursor={} nextCursorType={}", methodName, items, hasNext, nextType);
+    }
+    return ok;
+}
+
+std::unique_ptr<JSONRPCResponse> Server::Impl::handleSubscribeRequest(const JSONRPCRequest& req) {
+    // Subscribe to a specific URI if provided
+    this->resourcesSubscribed = true;
+    if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(req.params->value);
+        auto it = o.find("uri");
+        if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
+            const std::string& uri = std::get<std::string>(it->second->value);
+            std::lock_guard<std::mutex> lk(this->registryMutex);
+            this->subscribedUris.insert(uri);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id;
+    resp->result = JSONValue{JSONValue::Object{}};
+    return resp;
+}
+
+std::unique_ptr<JSONRPCResponse> Server::Impl::handleUnsubscribeRequest(const JSONRPCRequest& req) {
+    // Unsubscribe from a specific URI if provided; if none, clear all
+    if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(req.params->value);
+        auto it = o.find("uri");
+        if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
+            const std::string& uri = std::get<std::string>(it->second->value);
+            std::lock_guard<std::mutex> lk(this->registryMutex);
+            this->subscribedUris.erase(uri);
+        } else {
+            std::lock_guard<std::mutex> lk(this->registryMutex);
+            this->subscribedUris.clear();
+        }
+    } else {
+        std::lock_guard<std::mutex> lk(this->registryMutex);
+        this->subscribedUris.clear();
+    }
+    this->resourcesSubscribed = !this->subscribedUris.empty();
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id;
+    resp->result = JSONValue{JSONValue::Object{}};
+    return resp;
+}
+
+std::unique_ptr<JSONRPCResponse> Server::Impl::handleCreateMessageRequest(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token) {
+    // Client-initiated sampling request to the server (if supported)
+    if (!this->samplingHandler) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No server sampling handler registered";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    JSONValue messages; JSONValue modelPreferences; JSONValue systemPrompt; JSONValue includeContext;
+    if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        const auto& o = std::get<JSONValue::Object>(req.params->value);
+        auto it = o.find("messages"); if (it != o.end()) messages = *it->second;
+        it = o.find("modelPreferences"); if (it != o.end()) modelPreferences = *it->second;
+        it = o.find("systemPrompt"); if (it != o.end()) systemPrompt = *it->second;
+        it = o.find("includeContext"); if (it != o.end()) includeContext = *it->second;
+    }
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
+        if (!validation::validateCreateMessageParamsJson(paramsVal)) {
+            bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
+            size_t messagesCount = 0;
+            if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
+                const auto& po = std::get<JSONValue::Object>(paramsVal.value);
+                auto itP = po.find("messages");
+                hasMessages = (itP != po.end());
+                if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
+                    messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
+                }
+                hasModelPreferences = (po.find("modelPreferences") != po.end());
+                hasSystemPrompt = (po.find("systemPrompt") != po.end());
+                hasIncludeContext = (po.find("includeContext") != po.end());
+            }
+            LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={} (server)",
+                      Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
+            return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
+    JSONValue result = fut.get();
+    if (token && token->cancelled.load()) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+    }
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        if (!validation::validateCreateMessageResultJson(result)) {
+            bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
+            if (std::holds_alternative<JSONValue::Object>(result.value)) {
+                const auto& ro = std::get<JSONValue::Object>(result.value);
+                auto itM = ro.find("model"); hasModel = (itM != ro.end());
+                auto itR = ro.find("role"); hasRole = (itR != ro.end());
+                auto itC = ro.find("content");
+                if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
+                    hasContentArray = true;
+                    contentCount = std::get<JSONValue::Array>(itC->second->value).size();
+                }
+            }
+            LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={} (server)",
+                      Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
+            return errors::makeErrorResponse(req.id, e);
+        }
+    }
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id;
+    resp->result = result;
+    return resp;
 }
 
 mcp::async::Task<void> Server::Impl::coStop() {

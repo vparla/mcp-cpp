@@ -22,29 +22,29 @@
 #  endif
 #endif
 
-#include <iostream>
-#include <thread>
-#include <atomic>
-#include <queue>
-#include <deque>
-#include <mutex>
-#include <condition_variable>
-#include <random>
-#include <optional>
-#include <vector>
-#include <array>
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
-#include <limits>
-#include <unordered_map>
+#include <deque>
 #include <future>
+#include <iostream>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <queue>
+#include <random>
 #include <string>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
-#include "mcp/StdioTransport.hpp"
-#include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
+#include "mcp/JSONRPCTypes.h"
+#include "mcp/StdioTransport.hpp"
 #include "env/EnvVars.h"
 
 namespace mcp {
@@ -62,7 +62,6 @@ public:
     std::thread timeoutThread;
     std::thread writerThread;
     std::mutex requestMutex;
-    std::mutex outMutex; // legacy serialize writes to stdout (unused by writer thread)
     std::mutex writeMutex; // protects writeQueue and queuedBytes
     std::condition_variable cvWrite;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;

@@ -4,19 +4,19 @@
 // File: Client.cpp
 // Purpose: MCP client implementation
 //==========================================================================================================
-#include <chrono>
 #include <atomic>
-#include <thread>
-#include <unordered_map>
+#include <chrono>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <mutex>
+#include <thread>
+#include <unordered_map>
 
+#include "logging/Logger.h"
 #include "mcp/Client.h"
 #include "mcp/Protocol.h"
-#include "logging/Logger.h"
-#include "mcp/async/Task.h"
 #include "mcp/async/FutureAwaitable.h"
+#include "mcp/async/Task.h"
 #include "mcp/errors/Errors.h"
 #include "mcp/validation/Validation.h"
 #include "mcp/validation/Validators.h"
@@ -136,145 +136,166 @@ private:
                                                            const std::optional<int>& limit);
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri);
     mcp::async::Task<JSONValue> coGetPrompt(const std::string& name, const JSONValue& arguments);
+
+    // Helpers to keep functions short and readable
+    void onNotification(std::unique_ptr<JSONRPCNotification> n);
+    void handleProgressNotification(const JSONValue::Object& o);
+    void invalidateCachesForListChanged(const std::string& method);
+    std::unique_ptr<JSONRPCResponse> onRequest(const JSONRPCRequest& req);
+    void logInvalidCreateMessageParamsContext(const JSONValue& paramsVal);
+    void logInvalidCreateMessageResultContext(const JSONValue& result);
 };
+
+void Client::Impl::handleProgressNotification(const JSONValue::Object& o) {
+    std::string token;
+    double progress = 0.0;
+    std::string message;
+    auto tIt = o.find("progressToken");
+    if (tIt != o.end() && std::holds_alternative<std::string>(tIt->second->value)) {
+        token = std::get<std::string>(tIt->second->value);
+    }
+    auto pIt = o.find("progress");
+    if (pIt != o.end() && std::holds_alternative<double>(pIt->second->value)) {
+        progress = std::get<double>(pIt->second->value);
+    }
+    auto mIt = o.find("message");
+    if (mIt != o.end() && std::holds_alternative<std::string>(mIt->second->value)) {
+        message = std::get<std::string>(mIt->second->value);
+    }
+    if (this->validationMode == validation::ValidationMode::Strict) {
+        bool ok = !token.empty() && (progress >= 0.0 && progress <= 1.0);
+        if (!ok) {
+            LOG_WARN("Dropping invalid progress notification under Strict mode");
+            return;
+        }
+    }
+    if (this->progressHandler) {
+        this->progressHandler(token, progress, message);
+    }
+}
+
+void Client::Impl::invalidateCachesForListChanged(const std::string& method) {
+    if (method == Methods::ToolListChanged) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->toolsCache.set = false;
+    } else if (method == Methods::ResourceListChanged) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->resourcesCache.set = false;
+        this->templatesCache.set = false;
+    } else if (method == Methods::PromptListChanged) {
+        std::lock_guard<std::mutex> lk(this->cacheMutex);
+        this->promptsCache.set = false;
+    }
+}
+
+void Client::Impl::onNotification(std::unique_ptr<JSONRPCNotification> n) {
+    if (!n) { return; }
+    try {
+        if (n->method == Methods::Progress && this->progressHandler && n->params.has_value()) {
+            if (std::holds_alternative<JSONValue::Object>(n->params->value)) {
+                const auto& o = std::get<JSONValue::Object>(n->params->value);
+                this->handleProgressNotification(o);
+            }
+        } else {
+            this->invalidateCachesForListChanged(n->method);
+            auto it = this->notificationHandlers.find(n->method);
+            if (it != this->notificationHandlers.end()) {
+                it->second(n->method, n->params.value_or(JSONValue{}));
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Notification handler exception: {}", e.what());
+    }
+}
+
+void Client::Impl::logInvalidCreateMessageParamsContext(const JSONValue& paramsVal) {
+    bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
+    size_t messagesCount = 0;
+    if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
+        const auto& po = std::get<JSONValue::Object>(paramsVal.value);
+        auto itP = po.find("messages");
+        hasMessages = (itP != po.end());
+        if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
+            messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
+        }
+        hasModelPreferences = (po.find("modelPreferences") != po.end());
+        hasSystemPrompt = (po.find("systemPrompt") != po.end());
+        hasIncludeContext = (po.find("includeContext") != po.end());
+    }
+    LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={}",
+              Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
+}
+
+void Client::Impl::logInvalidCreateMessageResultContext(const JSONValue& result) {
+    bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
+    if (std::holds_alternative<JSONValue::Object>(result.value)) {
+        const auto& ro = std::get<JSONValue::Object>(result.value);
+        auto itM = ro.find("model"); hasModel = (itM != ro.end());
+        auto itR = ro.find("role"); hasRole = (itR != ro.end());
+        auto itC = ro.find("content");
+        if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
+            hasContentArray = true;
+            contentCount = std::get<JSONValue::Array>(itC->second->value).size();
+        }
+    }
+    LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={}",
+              Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
+}
+
+std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& req) {
+    try {
+        if (req.method == Methods::CreateMessage) {
+            if (!this->samplingHandler) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No sampling handler registered";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            JSONValue messages, modelPreferences, systemPrompt, includeContext;
+            if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+                const auto& o = std::get<JSONValue::Object>(req.params->value);
+                auto it = o.find("messages"); if (it != o.end()) messages = *it->second;
+                it = o.find("modelPreferences"); if (it != o.end()) modelPreferences = *it->second;
+                it = o.find("systemPrompt"); if (it != o.end()) systemPrompt = *it->second;
+                it = o.find("includeContext"); if (it != o.end()) includeContext = *it->second;
+            }
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
+                if (!validation::validateCreateMessageParamsJson(paramsVal)) {
+                    this->logInvalidCreateMessageParamsContext(paramsVal);
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+            }
+            auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
+            JSONValue result = fut.get();
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateCreateMessageResultJson(result)) {
+                    this->logInvalidCreateMessageResultContext(result);
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+            }
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = result;
+            return resp;
+        }
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotFound, "Method not found", std::nullopt);
+    } catch (const std::exception& e) {
+        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+    }
+}
 
 mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> transport) {
     FUNC_SCOPE();
     this->transport = std::move(transport);
-    // Wire transport handlers
     this->transport->SetNotificationHandler([this](std::unique_ptr<JSONRPCNotification> n) {
-        if (!n) return;
-        try {
-            if (n->method == Methods::Progress && this->progressHandler && n->params.has_value()) {
-                if (std::holds_alternative<JSONValue::Object>(n->params->value)) {
-                    const auto& o = std::get<JSONValue::Object>(n->params->value);
-                    std::string token;
-                    double progress = 0.0;
-                    std::string message;
-                    auto tIt = o.find("progressToken");
-                    if (tIt != o.end() && std::holds_alternative<std::string>(tIt->second->value)) {
-                        token = std::get<std::string>(tIt->second->value);
-                    }
-                    auto pIt = o.find("progress");
-                    if (pIt != o.end() && std::holds_alternative<double>(pIt->second->value)) {
-                        progress = std::get<double>(pIt->second->value);
-                    }
-                    auto mIt = o.find("message");
-                    if (mIt != o.end() && std::holds_alternative<std::string>(mIt->second->value)) {
-                        message = std::get<std::string>(mIt->second->value);
-                    }
-                    // Strict validation for progress
-                    if (this->validationMode == validation::ValidationMode::Strict) {
-                        bool ok = !token.empty() && (progress >= 0.0 && progress <= 1.0);
-                        if (!ok) {
-                            LOG_WARN("Dropping invalid progress notification under Strict mode");
-                            return;
-                        }
-                    }
-                    if (this->progressHandler) this->progressHandler(token, progress, message);
-                }
-            } else {
-                // Cache invalidation for list changes
-                if (n->method == Methods::ToolListChanged) {
-                    std::lock_guard<std::mutex> lk(this->cacheMutex);
-                    this->toolsCache.set = false;
-                } else if (n->method == Methods::ResourceListChanged) {
-                    std::lock_guard<std::mutex> lk(this->cacheMutex);
-                    this->resourcesCache.set = false;
-                    this->templatesCache.set = false; // templates likely impacted by resources changes
-                } else if (n->method == Methods::PromptListChanged) {
-                    std::lock_guard<std::mutex> lk(this->cacheMutex);
-                    this->promptsCache.set = false;
-                }
-                auto it = this->notificationHandlers.find(n->method);
-                if (it != this->notificationHandlers.end()) {
-                    it->second(n->method, n->params.value_or(JSONValue{}));
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Notification handler exception: {}", e.what());
-        }
+        this->onNotification(std::move(n));
     });
     this->transport->SetErrorHandler([this](const std::string& err) {
         if (this->errorHandler) this->errorHandler(err);
     });
-    // Handle server-initiated requests (e.g., sampling/createMessage)
     this->transport->SetRequestHandler([this](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        try {
-            if (req.method == Methods::CreateMessage) {
-                if (!this->samplingHandler) {
-                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No sampling handler registered";
-                    return errors::makeErrorResponse(req.id, e);
-                }
-                JSONValue messages;
-                JSONValue modelPreferences;
-                JSONValue systemPrompt;
-                JSONValue includeContext;
-                if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
-                    const auto& o = std::get<JSONValue::Object>(req.params->value);
-                    auto it = o.find("messages");
-                    if (it != o.end()) messages = *it->second;
-                    it = o.find("modelPreferences");
-                    if (it != o.end()) modelPreferences = *it->second;
-                    it = o.find("systemPrompt");
-                    if (it != o.end()) systemPrompt = *it->second;
-                    it = o.find("includeContext");
-                    if (it != o.end()) includeContext = *it->second;
-                }
-                // Strict validation of incoming request params
-                if (this->validationMode == validation::ValidationMode::Strict) {
-                    JSONValue paramsVal = req.params.has_value() ? req.params.value() : JSONValue{JSONValue::Object{}};
-                    if (!validation::validateCreateMessageParamsJson(paramsVal)) {
-                        bool hasMessages = false, hasModelPreferences = false, hasSystemPrompt = false, hasIncludeContext = false;
-                        size_t messagesCount = 0;
-                        if (std::holds_alternative<JSONValue::Object>(paramsVal.value)) {
-                            const auto& po = std::get<JSONValue::Object>(paramsVal.value);
-                            auto itP = po.find("messages");
-                            hasMessages = (itP != po.end());
-                            if (hasMessages && std::holds_alternative<JSONValue::Array>(itP->second->value)) {
-                                messagesCount = std::get<JSONValue::Array>(itP->second->value).size();
-                            }
-                            hasModelPreferences = (po.find("modelPreferences") != po.end());
-                            hasSystemPrompt = (po.find("systemPrompt") != po.end());
-                            hasIncludeContext = (po.find("includeContext") != po.end());
-                        }
-                        LOG_ERROR("Validation failed (Strict): {} params invalid | hasMessages={} messagesCount={} hasModelPreferences={} hasSystemPrompt={} hasIncludeContext={}",
-                                  Methods::CreateMessage, hasMessages, messagesCount, hasModelPreferences, hasSystemPrompt, hasIncludeContext);
-                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
-                        return errors::makeErrorResponse(req.id, e);
-                    }
-                }
-                auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
-                JSONValue result = fut.get();
-                // Strict validation of handler result
-                if (this->validationMode == validation::ValidationMode::Strict) {
-                    if (!validation::validateCreateMessageResultJson(result)) {
-                        bool hasModel = false, hasRole = false, hasContentArray = false; size_t contentCount = 0;
-                        if (std::holds_alternative<JSONValue::Object>(result.value)) {
-                            const auto& ro = std::get<JSONValue::Object>(result.value);
-                            auto itM = ro.find("model"); hasModel = (itM != ro.end());
-                            auto itR = ro.find("role"); hasRole = (itR != ro.end());
-                            auto itC = ro.find("content");
-                            if (itC != ro.end() && std::holds_alternative<JSONValue::Array>(itC->second->value)) {
-                                hasContentArray = true;
-                                contentCount = std::get<JSONValue::Array>(itC->second->value).size();
-                            }
-                        }
-                        LOG_ERROR("Validation failed (Strict): {} result invalid | hasModel={} hasRole={} hasContentArray={} contentCount={}",
-                                  Methods::CreateMessage, hasModel, hasRole, hasContentArray, contentCount);
-                        errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid sampling result shape";
-                        return errors::makeErrorResponse(req.id, e);
-                    }
-                }
-                auto resp = std::make_unique<JSONRPCResponse>();
-                resp->id = req.id;
-                resp->result = result;
-                return resp;
-            }
-            return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotFound, "Method not found", std::nullopt);
-        } catch (const std::exception& e) {
-            return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
-        }
+        return this->onRequest(req);
     });
     auto fut = this->transport->Start();
     try {
@@ -1028,8 +1049,6 @@ std::future<void> Client::UnsubscribeResources(const std::optional<std::string>&
     FUNC_SCOPE();
     return pImpl->coUnsubscribeResources(uri).toFuture();
 }
-
-// [removed deprecated methods]
 
 std::future<std::vector<Tool>> Client::ListTools() {
     FUNC_SCOPE();

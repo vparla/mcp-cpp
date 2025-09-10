@@ -5,20 +5,20 @@
 // Purpose: In-memory transport implementation
 //==========================================================================================================
 
-#include <thread>
 #include <atomic>
-#include <queue>
-#include <mutex>
 #include <condition_variable>
-#include <random>
-#include <unordered_map>
 #include <future>
-#include <string>
+#include <mutex>
+#include <queue>
+#include <random>
 #include <stop_token>
+#include <string>
+#include <thread>
+#include <unordered_map>
 
-#include "mcp/InMemoryTransport.hpp"
-#include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
+#include "mcp/JSONRPCTypes.h"
+#include "mcp/InMemoryTransport.hpp"
 
 namespace mcp {
 

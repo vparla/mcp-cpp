@@ -51,6 +51,223 @@ Tips:
 - Add new tests by updating `tests/CMakeLists.txt` and adding `TEST(...)` cases.
 - Note: when writing code that directly uses the in-memory transport, include `mcp/InMemoryTransport.hpp`. For StdioTransport, include `mcp/StdioTransport.hpp`.
 
+## Command variations and options (Linux/macOS and Windows via WSL)
+
+Below are commonly used Docker Buildx/CTest variants with both native (Linux/macOS) and Windows (PowerShell via WSL2 Ubuntu) forms. Substitute your WSL distro name if not `Ubuntu`.
+
+### Full test run (default)
+
+- Linux/macOS:
+```bash
+cd /path/to/mcp-cpp
+docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test .
+```
+
+- Windows (PowerShell via WSL2 Ubuntu):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+```
+
+### Full rebuild (disable layer cache)
+
+- Linux/macOS:
+```bash
+docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test .
+```
+
+- Windows (WSL):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test ."
+```
+
+### Build only (don’t run CTest yet)
+
+- Linux/macOS:
+```bash
+docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build .
+```
+
+- Windows (WSL):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
+```
+
+### Run CTest inside the built container
+
+- Run entire suite with verbose failure output:
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build --output-on-failure'"
+```
+
+- Run tests matching a regex (single or group):
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ClientCache --output-on-failure'"
+```
+
+- Re-run only failed tests from the last run:
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build --rerun-failed --output-on-failure'"
+```
+
+- Increase verbosity (`-V` or `-VV`) and run in parallel (adjust `-j`):
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -VV -j 4 --output-on-failure'"
+```
+
+- List discovered tests without running:
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -N'"
+```
+
+- Inspect the last CTest log:
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && sed -n \"1,200p\" build/Testing/Temporary/LastTest.log'"
+```
+
+- Start an interactive shell inside the build image:
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -it mcp-cpp-build bash"
+```
+
+> Note: On Linux/macOS, replace the outer `wsl -d Ubuntu -- bash -lc "..."` with the inner command only.
+
+### Specify architecture (e.g., Apple Silicon building x86_64)
+
+- Linux/macOS:
+```bash
+docker buildx build --platform linux/amd64 -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test .
+```
+
+- Windows (WSL):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build --platform linux/amd64 -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+```
+
+### Pass environment/options to tests
+
+- Build-time transport timeout (already supported in Dockerfile):
+```bash
+docker buildx build -f Dockerfile.demo --target test --build-arg MCP_STDIOTRANSPORT_TIMEOUT_MS=200 --progress=plain --pull --load -t mcp-cpp-test .
+```
+
+- Run-time environment inside tests (logger level, stdio mode, etc.):
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm -t -e MCP_LOG_LEVEL=INFO -e MCP_STDIO_MODE=1 mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build --output-on-failure'"
+```
+
+Common env vars:
+- `MCP_LOG_LEVEL` (e.g., `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`)
+- `MCP_STDIO_MODE=1` routes Logger to stderr (useful to avoid polluting stdio frames)
+- `MCP_STDIOTRANSPORT_TIMEOUT_MS` (build arg) configures request timeout
+
+### Clean up Docker caches (optional)
+
+- Remove dangling build cache:
+```bash
+docker builder prune -f
+```
+
+- Remove dangling images:
+```bash
+docker image prune -f
+```
+
+### Docker Desktop (Windows, no WSL wrapper)
+
+If you use Docker Desktop with Linux containers, you can run commands natively in PowerShell without the WSL shim. Use Windows-style paths and prefer `--mount` for bind mounts.
+
+- Full test run:
+```powershell
+cd C:\Work\mcp-cpp
+docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test .
+```
+
+- Build only:
+```powershell
+docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build .
+```
+
+- Run full test suite inside built image:
+```powershell
+docker run --rm -t mcp-cpp-build bash -lc "cd /src && ctest --test-dir build --output-on-failure"
+```
+
+- Regex match a test group:
+```powershell
+docker run --rm -t mcp-cpp-build bash -lc "cd /src && ctest --test-dir build -R ClientCache --output-on-failure"
+```
+
+- Run the demo with a bind mount (note Windows path):
+```powershell
+docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo .
+docker run --rm --name mcp-cpp-demo \
+  -e MCP_STDIOTRANSPORT_TIMEOUT_MS=2000 \
+  --mount type=bind,src=C:\\Work\\mcp-cpp,dst=/work mcp-cpp-demo
+```
+
+Notes:
+- If your Windows path contains spaces, wrap it in quotes: `src="C:\\Path With Spaces\\mcp-cpp"`.
+- On older Docker Desktop versions, you may use `-v C:\\Work\\mcp-cpp:/work` instead of `--mount`.
+- For multi-arch images on Docker Desktop, set `--platform` as shown below.
+
+### Publishing images to a registry (`--push`)
+
+Use `--push` to upload images to a registry (Docker Hub, GHCR, etc.). Do not combine `--push` with `--load`.
+
+1) Log in to your registry (example: Docker Hub or GHCR):
+```powershell
+docker login   # Docker Hub
+# or
+docker login ghcr.io  # GitHub Container Registry
+```
+
+2) Choose a tag with your registry/namespace (examples):
+- Docker Hub: `yourname/mcp-cpp-test:latest`
+- GHCR: `ghcr.io/yourorg/mcp-cpp-test:latest`
+
+3) Build and push a single-arch image:
+- Linux/macOS:
+```bash
+docker buildx build -f Dockerfile.demo --target test --progress=plain --pull \
+  -t yourname/mcp-cpp-test:latest --push .
+```
+- Windows (PowerShell / Docker Desktop):
+```powershell
+docker buildx build -f Dockerfile.demo --target test --progress=plain --pull \
+  -t yourname/mcp-cpp-test:latest --push .
+```
+
+4) Build and push a multi-arch image (recommended for public images):
+- Linux/macOS:
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.demo --target test \
+  --progress=plain --pull -t yourname/mcp-cpp-test:latest --push .
+```
+- Windows (PowerShell / Docker Desktop):
+```powershell
+docker buildx build --platform linux/amd64,linux/arm64 -f Dockerfile.demo --target test \
+  --progress=plain --pull -t yourname/mcp-cpp-test:latest --push .
+```
+
+5) Optional: ensure a Buildx builder instance is available (only if needed):
+```powershell
+docker buildx ls
+# If no usable builder is available:
+docker buildx create --name mcp-builder --use
+docker buildx inspect --bootstrap
+```
+
+6) Push other targets (build/demo) with your registry tag:
+```powershell
+# Build stage as a published image
+docker buildx build -f Dockerfile.demo --target build --progress=plain --pull \
+  -t yourname/mcp-cpp-build:latest --push .
+
+# Demo stage as a published image
+docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull \
+  -t yourname/mcp-cpp-demo:latest --push .
+```
+
 ### Terminal output and colors
 
 - The Docker test stage runs `ctest -VV`, so GoogleTest logs and any shell script output are printed to your terminal.
