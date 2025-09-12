@@ -279,9 +279,13 @@ std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& r
             resp->result = result;
             return resp;
         }
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::MethodNotFound, "Method not found", std::nullopt);
+        {
+            errors::McpError e2; e2.code = JSONRPCErrorCodes::MethodNotFound; e2.message = "Method not found";
+            return errors::makeErrorResponse(req.id, e2);
+        }
     } catch (const std::exception& e) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
+        return errors::makeErrorResponse(req.id, err);
     }
 }
 

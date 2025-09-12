@@ -43,6 +43,7 @@ add_executable(mcp_tests
   test_validation_lists.cpp
   test_validation_sampling.cpp
   test_client_cache.cpp
+  test_negative_api.cpp
 )
 
 target_link_libraries(mcp_tests

@@ -70,6 +70,7 @@ public:
     std::atomic<bool> resourcesSubscribed{false};
     std::unordered_set<std::string> subscribedUris; // per-URI subscriptions
     IServer::SamplingHandler samplingHandler;       // optional sampling handler
+
     // Keepalive state
     std::atomic<int> keepaliveIntervalMs{-1};
     std::atomic<bool> keepaliveStop{false};
@@ -78,6 +79,7 @@ public:
     std::atomic<unsigned int> keepaliveFailureThreshold{3u};
     std::atomic<bool> keepaliveSending{false};
     std::atomic<bool> keepaliveSendFailed{false};
+
     // Client logging preference (minimum severity)
     std::atomic<Logger::Level> clientLogMin{Logger::Level::DEBUG};
 
@@ -93,6 +95,7 @@ public:
     // Cancellation support
     std::mutex cancelMutex;
     std::unordered_map<std::string, std::shared_ptr<CancellationToken>> cancelMap;
+    
     // Track stop_sources for cooperative cancellation of async handlers per request id
     std::unordered_map<std::string, std::vector<std::shared_ptr<std::stop_source>>> stopSources;
 
@@ -396,10 +399,12 @@ public:
         auto fut = handler(arguments, src->get_token());
         tr = fut.get();
     } catch (const std::exception& e) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
+        return errors::makeErrorResponse(req.id, err);
     }
     if (token && token->cancelled.load()) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+        return errors::makeErrorResponse(req.id, err);
     }
     JSONValue::Object obj;
     JSONValue::Array content;
@@ -441,10 +446,12 @@ public:
         auto fut = handler(uri, src->get_token());
         rr = fut.get();
     } catch (const std::exception& e) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
+        return errors::makeErrorResponse(req.id, err);
     }
     if (token && token->cancelled.load()) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+        return errors::makeErrorResponse(req.id, err);
     }
     JSONValue::Object obj;
     JSONValue::Array contents;
@@ -759,7 +766,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         } else if (req.method == Methods::CallTool) {
             auto r = this->handleToolsCall(req, token);
             if (token && token->cancelled.load()) {
-                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+                errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+                return errors::makeErrorResponse(req.id, err);
             }
             return r;
         } else if (req.method == Methods::ListResources) {
@@ -775,7 +783,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         } else if (req.method == Methods::ReadResource) {
             auto r = this->handleResourcesRead(req, token);
             if (token && token->cancelled.load()) {
-                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+                errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+                return errors::makeErrorResponse(req.id, err);
             }
             return r;
         } else if (req.method == Methods::ListPrompts) {
@@ -783,13 +792,15 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         } else if (req.method == Methods::GetPrompt) {
             auto r = this->handlePromptsGet(req);
             if (token && token->cancelled.load()) {
-                return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+                errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+                return errors::makeErrorResponse(req.id, err);
             }
             return r;
         }
         { errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; return errors::makeErrorResponse(req.id, e); }
     } catch (const std::exception& e) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
+        return errors::makeErrorResponse(req.id, err);
     }
 }
 
@@ -954,7 +965,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::handleCreateMessageRequest(const 
     auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
     JSONValue result = fut.get();
     if (token && token->cancelled.load()) {
-        return CreateErrorResponse(req.id, JSONRPCErrorCodes::InternalError, "Cancelled", std::nullopt);
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+        return errors::makeErrorResponse(req.id, err);
     }
     if (this->validationMode == validation::ValidationMode::Strict) {
         if (!validation::validateCreateMessageResultJson(result)) {
