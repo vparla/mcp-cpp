@@ -58,6 +58,34 @@ inline std::vector<JSONValue> makeTextMessages(const std::vector<std::string>& t
     return msgs;
 }
 
+// Builder to compose typed GetPromptResult easily
+class ResultBuilder {
+public:
+    ResultBuilder& setDescription(const std::string& description) {
+        this->description_ = description;
+        return *this;
+    }
+
+    ResultBuilder& addText(const std::string& text) {
+        JSONValue::Object item; item["type"] = std::make_shared<JSONValue>(std::string("text")); item["text"] = std::make_shared<JSONValue>(text);
+        messages_.push_back(JSONValue{item});
+        return *this;
+    }
+
+    GetPromptResult build() const {
+        GetPromptResult r; r.description = this->description_; r.messages = this->messages_; return r;
+    }
+
+private:
+    std::string description_;
+    std::vector<JSONValue> messages_;
+};
+
+// Convenience factory
+inline GetPromptResult makeTextPromptResult(const std::string& description, const std::vector<std::string>& texts) {
+    ResultBuilder b; b.setDescription(description); for (const auto& t : texts) b.addText(t); return b.build();
+}
+
 } // namespace prompts
 } // namespace typed
 } // namespace mcp

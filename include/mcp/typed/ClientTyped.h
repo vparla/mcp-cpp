@@ -172,6 +172,20 @@ inline std::future<std::vector<Resource>> listAllResources(IClient& client, cons
     });
 }
 
+inline std::future<std::vector<ResourceTemplate>> listAllResourceTemplates(IClient& client, const std::optional<int>& pageLimit = std::nullopt) {
+    return std::async(std::launch::async, [&client, pageLimit]() {
+        std::vector<ResourceTemplate> all;
+        std::optional<std::string> cursor;
+        while (true) {
+            auto page = client.ListResourceTemplatesPaged(cursor, pageLimit).get();
+            for (auto& rt : page.resourceTemplates) all.push_back(std::move(rt));
+            if (!page.nextCursor.has_value()) break;
+            cursor = page.nextCursor;
+        }
+        return all;
+    });
+}
+
 inline std::future<std::vector<Prompt>> listAllPrompts(IClient& client, const std::optional<int>& pageLimit = std::nullopt) {
     return std::async(std::launch::async, [&client, pageLimit]() {
         std::vector<Prompt> all;
