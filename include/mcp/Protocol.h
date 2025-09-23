@@ -126,6 +126,9 @@ struct ResourceTemplate {
 
 struct ReadResourceParams {
     std::string uri;
+    // Experimental: optional byte offset and length to support chunked reads
+    std::optional<int64_t> offset; // default 0 when not provided
+    std::optional<int64_t> length; // read to end when not provided; must be > 0 if provided
 };
 
 struct ReadResourceResult {

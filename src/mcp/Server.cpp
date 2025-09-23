@@ -424,11 +424,16 @@ public:
     std::unique_ptr<JSONRPCResponse> handleResourcesRead(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token) {
     LOG_DEBUG("Handling resources/read request");
     std::string uri;
+    std::optional<int64_t> offsetOpt; std::optional<int64_t> lengthOpt;
     if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
         const auto& o = std::get<JSONValue::Object>(req.params->value);
         auto it = o.find("uri"); if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) uri = std::get<std::string>(it->second->value);
+        auto io = o.find("offset"); if (io != o.end() && std::holds_alternative<int64_t>(io->second->value)) offsetOpt = std::get<int64_t>(io->second->value);
+        auto il = o.find("length"); if (il != o.end() && std::holds_alternative<int64_t>(il->second->value)) lengthOpt = std::get<int64_t>(il->second->value);
     }
     if (uri.empty()) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; return errors::makeErrorResponse(req.id, e); }
+    if (offsetOpt.has_value() && offsetOpt.value() < 0) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length"; return errors::makeErrorResponse(req.id, e); }
+    if (lengthOpt.has_value() && lengthOpt.value() <= 0) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length"; return errors::makeErrorResponse(req.id, e); }
     ResourceHandler handler;
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
@@ -453,9 +458,37 @@ public:
         errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
         return errors::makeErrorResponse(req.id, err);
     }
+
+    // Build result (optionally applying experimental chunking)
     JSONValue::Object obj;
     JSONValue::Array contents;
-    for (auto& v : rr.contents) contents.push_back(std::make_shared<JSONValue>(std::move(v)));
+    if (!offsetOpt.has_value() && !lengthOpt.has_value()) {
+        for (auto& v : rr.contents) { contents.push_back(std::make_shared<JSONValue>(std::move(v))); }
+    } else {
+        // Flatten text content and slice
+        std::string flat;
+        flat.reserve(1024);
+        for (const auto& v : rr.contents) {
+            if (!std::holds_alternative<JSONValue::Object>(v.value)) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            const auto& o = std::get<JSONValue::Object>(v.value);
+            auto itType = o.find("type"); auto itText = o.find("text");
+            if (itType == o.end() || itText == o.end() || !itType->second || !itText->second) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            if (!std::holds_alternative<std::string>(itType->second->value) || std::get<std::string>(itType->second->value) != std::string("text")) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            if (!std::holds_alternative<std::string>(itText->second->value)) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            flat += std::get<std::string>(itText->second->value);
+        }
+        size_t start = static_cast<size_t>(offsetOpt.value_or(0));
+        if (start >= flat.size()) {
+            // return empty contents
+        } else {
+            size_t maxLen = flat.size() - start;
+            size_t take = lengthOpt.has_value() ? static_cast<size_t>(lengthOpt.value()) : maxLen;
+            if (take > maxLen) { take = maxLen; }
+            std::string slice = flat.substr(start, take);
+            JSONValue::Object t; t["type"] = std::make_shared<JSONValue>(std::string("text")); t["text"] = std::make_shared<JSONValue>(slice);
+            contents.push_back(std::make_shared<JSONValue>(JSONValue{t}));
+        }
+    }
     obj["contents"] = std::make_shared<JSONValue>(contents);
     JSONValue result{obj};
     if (this->validationMode == validation::ValidationMode::Strict) {
@@ -554,6 +587,13 @@ public:
         capabilities.resources = ResourcesCapability{true, true};
         capabilities.tools = ToolsCapability{true};
         capabilities.logging = LoggingCapability{};
+        // Advertise experimental resource read chunking capability by default
+        {
+            JSONValue::Object rrc;
+            rrc["enabled"] = std::make_shared<JSONValue>(true);
+            rrc["maxChunkBytes"] = std::make_shared<JSONValue>(static_cast<int64_t>(65536));
+            capabilities.experimental["resourceReadChunking"] = JSONValue{rrc};
+        }
     }
 
     void handleNotification(std::unique_ptr<JSONRPCNotification> notification) {

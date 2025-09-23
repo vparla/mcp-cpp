@@ -81,6 +81,14 @@ public:
             auto capsIt = obj.find("capabilities");
             if (capsIt != obj.end() && std::holds_alternative<JSONValue::Object>(capsIt->second->value)) {
                 const auto& capsObj = std::get<JSONValue::Object>(capsIt->second->value);
+                // Parse experimental capability passthrough
+                auto expIt = capsObj.find("experimental");
+                if (expIt != capsObj.end() && std::holds_alternative<JSONValue::Object>(expIt->second->value)) {
+                    const auto& expObj = std::get<JSONValue::Object>(expIt->second->value);
+                    for (const auto& [k, v] : expObj) {
+                        this->serverCapabilities.experimental[k] = *v;
+                    }
+                }
                 
                 // Parse prompts capability
                 auto promptsIt = capsObj.find("prompts");
@@ -135,6 +143,9 @@ private:
     mcp::async::Task<PromptsListResult> coListPromptsPaged(const std::optional<std::string>& cursor,
                                                            const std::optional<int>& limit);
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri);
+    mcp::async::Task<JSONValue> coReadResource(const std::string& uri,
+                                               const std::optional<int64_t>& offset,
+                                               const std::optional<int64_t>& length);
     mcp::async::Task<JSONValue> coGetPrompt(const std::string& name, const JSONValue& arguments);
 
     // Helpers to keep functions short and readable
@@ -977,6 +988,31 @@ mcp::async::Task<JSONValue> Client::Impl::coReadResource(const std::string& uri)
     co_return JSONValue{};
 }
 
+mcp::async::Task<JSONValue> Client::Impl::coReadResource(const std::string& uri,
+                                                         const std::optional<int64_t>& offset,
+                                                         const std::optional<int64_t>& length) {
+    FUNC_SCOPE();
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::ReadResource;
+    JSONValue::Object paramsObj;
+    paramsObj["uri"] = std::make_shared<JSONValue>(uri);
+    if (offset.has_value()) { paramsObj["offset"] = std::make_shared<JSONValue>(static_cast<int64_t>(offset.value())); }
+    if (length.has_value()) { paramsObj["length"] = std::make_shared<JSONValue>(static_cast<int64_t>(length.value())); }
+    request->params = JSONValue{paramsObj};
+    LOG_DEBUG("Reading resource (range): uri='{}' offset={} length={}", uri,
+              offset.has_value() ? std::to_string(offset.value()) : std::string("<none>"),
+              length.has_value() ? std::to_string(length.value()) : std::string("<none>"));
+    auto fut = this->transport->SendRequest(std::move(request));
+    try {
+        auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (response) {
+            if (response->result.has_value()) co_return response->result.value();
+            if (response->error.has_value()) co_return response->error.value();
+        }
+    } catch (const std::exception& e) { LOG_ERROR("ReadResource(range) exception: {}", e.what()); }
+    co_return JSONValue{};
+}
+
 mcp::async::Task<JSONValue> Client::Impl::coGetPrompt(const std::string& name, const JSONValue& arguments) {
     FUNC_SCOPE();
     auto request = std::make_unique<JSONRPCRequest>();
@@ -1095,6 +1131,13 @@ std::future<std::vector<ResourceTemplate>> Client::ListResourceTemplates() {
 std::future<JSONValue> Client::ReadResource(const std::string& uri) {
     FUNC_SCOPE();
     return pImpl->coReadResource(uri).toFuture();
+}
+
+std::future<JSONValue> Client::ReadResource(const std::string& uri,
+                                           const std::optional<int64_t>& offset,
+                                           const std::optional<int64_t>& length) {
+    FUNC_SCOPE();
+    return pImpl->coReadResource(uri, offset, length).toFuture();
 }
 
 std::future<std::vector<Prompt>> Client::ListPrompts() {

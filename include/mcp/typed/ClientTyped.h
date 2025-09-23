@@ -8,6 +8,9 @@
 #pragma once
 
 #include <future>
+#include <optional>
+#include <stdexcept>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -27,6 +30,77 @@ inline bool isErrorObject(const JSONValue& v) {
     auto itCode = o.find("code");
     auto itMsg = o.find("message");
     return itCode != o.end() && itMsg != o.end();
+}
+
+// Forward declarations for parsers used below
+inline ReadResourceResult parseReadResourceResult(const JSONValue& v);
+
+// Helper executed on background thread for range reads
+inline ReadResourceResult doReadResourceRange(IClient& client,
+                                              const std::string& uri,
+                                              std::optional<int64_t> offset,
+                                              std::optional<int64_t> length) {
+    JSONValue v = client.ReadResource(uri, offset, length).get();
+    if (isErrorObject(v)) {
+        auto e = errors::mcpErrorFromErrorValue(v);
+        if (e.has_value()) {
+            LOG_ERROR("resources/read (range) '{}' failed: code={} message={}", uri, e->code, e->message);
+        } else {
+            LOG_ERROR("resources/read (range) '{}' failed with unknown error shape", uri);
+        }
+        throw std::runtime_error(e.has_value() ? e->message : std::string("resources/read (range) error"));
+    }
+    if (client.GetValidationMode() == validation::ValidationMode::Strict) {
+        if (!validation::validateReadResourceResultJson(v)) {
+            LOG_ERROR("Validation failed (Strict): resources/read (range) result shape for '{}'", uri);
+            throw std::runtime_error("Validation failed: resources/read (range) result shape");
+        }
+    }
+    return parseReadResourceResult(v);
+}
+
+inline std::future<ReadResourceResult> readResourceRange(IClient& client,
+                                                         const std::string& uri,
+                                                         const std::optional<int64_t>& offset,
+                                                         const std::optional<int64_t>& length) {
+    return std::async(std::launch::async, doReadResourceRange, std::ref(client), uri, offset, length);
+}
+
+// Helper for assembling full resource via chunks
+inline ReadResourceResult doReadAllResourceInChunks(IClient& client,
+                                                    const std::string& uri,
+                                                    size_t chunkSize) {
+    if (chunkSize == 0) {
+        throw std::invalid_argument("chunkSize must be > 0");
+    }
+    ReadResourceResult agg; size_t offset = 0;
+    while (true) {
+        auto part = readResourceRange(client, uri, static_cast<int64_t>(offset), static_cast<int64_t>(chunkSize)).get();
+        if (part.contents.empty()) {
+            break;
+        }
+        for (auto& v : part.contents) { agg.contents.push_back(std::move(v)); }
+        bool lastPartial = false;
+        if (!part.contents.empty()) {
+            const auto& last = part.contents.back();
+            if (std::holds_alternative<JSONValue::Object>(last.value)) {
+                const auto& o = std::get<JSONValue::Object>(last.value);
+                auto itText = o.find("text");
+                if (itText != o.end() && itText->second && std::holds_alternative<std::string>(itText->second->value)) {
+                    lastPartial = (std::get<std::string>(itText->second->value).size() < chunkSize);
+                }
+            }
+        }
+        offset += chunkSize;
+        if (lastPartial) break;
+    }
+    return agg;
+}
+
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t chunkSize) {
+    return std::async(std::launch::async, doReadAllResourceInChunks, std::ref(client), uri, chunkSize);
 }
 
 inline CallToolResult parseCallToolResult(const JSONValue& v) {

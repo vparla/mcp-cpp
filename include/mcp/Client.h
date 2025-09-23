@@ -137,6 +137,18 @@ public:
     //   A future with the raw JSON result carrying a contents array (shape aligns with MCP spec).
     //==========================================================================================================
     virtual std::future<JSONValue> ReadResource(const std::string& uri) = 0;
+    //==========================================================================================================
+    // Reads the contents for the specified resource with optional byte-range parameters (experimental).
+    // Args:
+    //   uri: Resource identifier to read.
+    //   offset: Optional starting byte offset (>= 0).
+    //   length: Optional maximum number of bytes to return (> 0 when provided).
+    // Returns:
+    //   A future with the raw JSON result carrying a contents array.
+    //==========================================================================================================
+    virtual std::future<JSONValue> ReadResource(const std::string& uri,
+                                               const std::optional<int64_t>& offset,
+                                               const std::optional<int64_t>& length) = 0;
     
     //==========================================================================================================
     // Lists resource templates advertised by the server (non-paged helper).
@@ -338,6 +350,9 @@ public:
     std::future<ResourcesListResult> ListResourcesPaged(const std::optional<std::string>& cursor,
                                                        const std::optional<int>& limit) override;
     std::future<JSONValue> ReadResource(const std::string& uri) override;
+    std::future<JSONValue> ReadResource(const std::string& uri,
+                                       const std::optional<int64_t>& offset,
+                                       const std::optional<int64_t>& length) override;
     std::future<std::vector<ResourceTemplate>> ListResourceTemplates() override;
     std::future<ResourceTemplatesListResult> ListResourceTemplatesPaged(const std::optional<std::string>& cursor,
                                                                        const std::optional<int>& limit) override;
