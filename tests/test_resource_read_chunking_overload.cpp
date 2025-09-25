@@ -49,17 +49,8 @@ TEST(ResourceReadChunkingOverload, ClampAwareOverload_UsesMinAndReassembles) {
     ASSERT_NO_THROW(client->Connect(std::move(clientTrans)).get());
     ClientCapabilities caps; ServerCapabilities scaps = client->Initialize(ci, caps).get();
 
-    // Extract clamp hint from capabilities
-    std::optional<size_t> clampHint;
-    auto it = scaps.experimental.find("resourceReadChunking");
-    if (it != scaps.experimental.end() && std::holds_alternative<mcp::JSONValue::Object>(it->second.value)) {
-        const auto& rrc = std::get<mcp::JSONValue::Object>(it->second.value);
-        auto itMax = rrc.find("maxChunkBytes");
-        if (itMax != rrc.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
-            auto v = static_cast<size_t>(std::get<int64_t>(itMax->second->value));
-            if (v > 0) clampHint = v;
-        }
-    }
+    // Extract clamp hint via typed helper
+    std::optional<size_t> clampHint = mcp::typed::extractResourceReadClamp(scaps);
 
     ASSERT_TRUE(clampHint.has_value());
     EXPECT_EQ(*clampHint, static_cast<size_t>(3));

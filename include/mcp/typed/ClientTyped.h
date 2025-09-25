@@ -33,6 +33,22 @@ inline bool isErrorObject(const JSONValue& v) {
     return itCode != o.end() && itMsg != o.end();
 }
 
+// Extracts the server-advertised clamp for resource read chunking, if present.
+// Returns maxChunkBytes when capabilities.experimental.resourceReadChunking.maxChunkBytes > 0
+// Otherwise returns std::nullopt.
+inline std::optional<size_t> extractResourceReadClamp(const ServerCapabilities& scaps) {
+    auto it = scaps.experimental.find("resourceReadChunking");
+    if (it == scaps.experimental.end()) return std::nullopt;
+    if (!std::holds_alternative<JSONValue::Object>(it->second.value)) return std::nullopt;
+    const auto& rrc = std::get<JSONValue::Object>(it->second.value);
+    auto itMax = rrc.find("maxChunkBytes");
+    if (itMax == rrc.end() || !itMax->second) return std::nullopt;
+    if (!std::holds_alternative<int64_t>(itMax->second->value)) return std::nullopt;
+    int64_t v = std::get<int64_t>(itMax->second->value);
+    if (v <= 0) return std::nullopt;
+    return static_cast<size_t>(v);
+}
+
 // Forward declarations for parsers used below
 inline ReadResourceResult parseReadResourceResult(const JSONValue& v);
 
@@ -124,6 +140,15 @@ inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
         }
         return doReadAllResourceInChunks(client, uri, effective);
     });
+}
+
+// Overload: accepts ServerCapabilities and derives clamp via extractResourceReadClamp
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t preferredChunkSize,
+                                                               const ServerCapabilities& scaps) {
+    auto clampHint = extractResourceReadClamp(scaps);
+    return readAllResourceInChunks(client, uri, preferredChunkSize, clampHint);
 }
 
 inline CallToolResult parseCallToolResult(const JSONValue& v) {

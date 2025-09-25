@@ -59,17 +59,8 @@ int main() {
     client->Connect(std::move(clientTrans)).get();
     ClientCapabilities caps; ServerCapabilities scaps = client->Initialize(ci, caps).get();
 
-    // Extract clamp hint from capabilities
-    std::optional<size_t> clampHint;
-    auto it = scaps.experimental.find("resourceReadChunking");
-    if (it != scaps.experimental.end() && std::holds_alternative<mcp::JSONValue::Object>(it->second.value)) {
-        const auto& rrc = std::get<mcp::JSONValue::Object>(it->second.value);
-        auto itMax = rrc.find("maxChunkBytes");
-        if (itMax != rrc.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
-            auto v = static_cast<size_t>(std::get<int64_t>(itMax->second->value));
-            if (v > 0) clampHint = v;
-        }
-    }
+    // Extract clamp hint from capabilities via typed helper
+    std::optional<size_t> clampHint = typed::extractResourceReadClamp(scaps);
 
     // Demonstrate reading a slice: offset=3, length=4 (will be clamped to 3 bytes by server)
     ReadResourceResult slice = typed::readResourceRange(*client, uri, std::optional<int64_t>(3), std::optional<int64_t>(4)).get();
@@ -79,7 +70,7 @@ int main() {
 
     // Demonstrate reading an entire resource in fixed-size chunks and reassembling
     const size_t chunkSize = 8;
-    ReadResourceResult agg = typed::readAllResourceInChunks(*client, uri, chunkSize, clampHint).get();
+    ReadResourceResult agg = typed::readAllResourceInChunks(*client, uri, chunkSize, scaps).get();
     std::string all;
     for (const auto& s : typed::collectText(agg)) all += s;
     std::cout << "Reassembled (preferred chunkSize=" << chunkSize << ", clamp=" << (clampHint ? std::to_string(*clampHint) : std::string("none")) << "): " << all << "\n";

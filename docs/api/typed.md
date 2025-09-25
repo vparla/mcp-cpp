@@ -87,16 +87,7 @@ Clamp-aware overload example:
 // use the clamp-aware overload to minimize round-trips by picking min(preferred, clamp).
 
 ServerCapabilities scaps = client->Initialize(ci, caps).get();
-std::optional<size_t> clampHint;
-auto it = scaps.experimental.find("resourceReadChunking");
-if (it != scaps.experimental.end() && std::holds_alternative<mcp::JSONValue::Object>(it->second.value)) {
-  const auto& rrc = std::get<mcp::JSONValue::Object>(it->second.value);
-  auto itMax = rrc.find("maxChunkBytes");
-  if (itMax != rrc.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
-    auto v = static_cast<size_t>(std::get<int64_t>(itMax->second->value));
-    if (v > 0) clampHint = v;
-  }
-}
+std::optional<size_t> clampHint = typed::extractResourceReadClamp(scaps);
 
 ReadResourceResult agg2 = typed::readAllResourceInChunks(*client, "mem://doc", /*preferredChunkSize*/ 8192, clampHint).get();
 ```
