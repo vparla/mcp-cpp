@@ -25,6 +25,7 @@ In this SDK the server and/or client use the experimental map for:
 - `capabilities.experimental.keepalive` (server → client) — see [Keepalive / Heartbeat](#keepalive--heartbeat).
 - `capabilities.experimental.loggingRateLimit` (server → client) — see [Logging rate limiting (experimental)](#logging-rate-limiting-experimental).
 - `capabilities.experimental.logLevel` (client → server) — see [Logging to client](#logging-to-client) for client-selected minimum log level.
+- `capabilities.experimental.resourceReadChunking` (server → client) — see [Resource read chunking (experimental)](#resource-read-chunking-experimental).
 
 ## Type aliases and handlers
 - using ToolResult = CallToolResult
@@ -111,6 +112,60 @@ Initialize semantics:
 - void UnregisterResource(const std::string& uri)
 - std::vector<Resource> ListResources()
 - std::future<JSONValue> ReadResource(const std::string& uri)
+
+## Resource read chunking (experimental)
+
+- The server supports optional byte-range parameters for resource reads. When the client includes `offset` and/or `length` in the `resources/read` request, the server will slice returned text content accordingly before responding. The overall result shape remains identical to a normal read.
+
+Advertisement (experimental):
+
+- The initialize response can include `capabilities.experimental.resourceReadChunking` with:
+  - `enabled: true`
+  - `maxChunkBytes: number` (hard clamp per slice)
+
+Notes and behavior:
+
+- Range slicing applies to text content only. If the resource handler returns non-text content while a range is requested, the server returns an error (InternalError) indicating that chunking requires text content.
+- When `offset` is beyond the end, the server returns an empty `contents` array.
+- When only `offset` is provided, the slice runs to the end.
+- When only `length` is provided, it is interpreted from `offset = 0`.
+- When `maxChunkBytes` is advertised, the server will clamp any ranged read to at most this many bytes for each returned slice. If the requested `length` exceeds `maxChunkBytes`, only `maxChunkBytes` bytes are returned. If `length` is not provided, the server still clamps each slice to `maxChunkBytes`.
+
+References:
+
+- Server request path and slicing logic are implemented in `handleResourcesRead` within [src/mcp/Server.cpp](../../src/mcp/Server.cpp).
+- Protocol types: `ReadResourceParams` and `ReadResourceResult` in [include/mcp/Protocol.h](../../include/mcp/Protocol.h).
+
+Examples:
+
+```cpp
+// Client (typed wrappers)
+using namespace mcp;
+// Slice 4 bytes starting at offset 3
+auto rr = typed::readResourceRange(*client, "mem://doc", std::optional<int64_t>(3), std::optional<int64_t>(4)).get();
+for (const auto& s : typed::collectText(rr)) {
+  std::cout << s; // prints the slice
+}
+
+// Read an entire resource in fixed-size chunks and reassemble
+auto agg = typed::readAllResourceInChunks(*client, "mem://doc", /*chunkSize=*/8192).get();
+std::string all;
+for (const auto& s : typed::collectText(agg)) all += s;
+```
+
+
+### Configuration API
+
+- `void SetResourceReadChunkingMaxBytes(const std::optional<size_t>& maxBytes)`
+  - Configures a hard clamp for ranged reads per returned slice.
+  - When set to a positive value, the server clamps slices to at most `maxBytes` bytes and advertises this in `capabilities.experimental.resourceReadChunking.maxChunkBytes` on the next initialize.
+  - When unset or set to `0`, no clamp is enforced (the server still advertises `enabled: true`).
+  - Note: Changing this value after the initialize handshake affects enforcement immediately for subsequent reads, but does not retroactively update what the client already observed in the initial capabilities advertisement.
+
+Tests:
+
+- Positive and boundary cases are covered in [tests/test_resource_read_chunking.cpp](../../tests/test_resource_read_chunking.cpp).
+- Capability absence fallback (range works even if not advertised) is covered in [tests/test_resource_read_chunking_capability_absence.cpp](../../tests/test_resource_read_chunking_capability_absence.cpp).
 
 ## Resource templates
 - void RegisterResourceTemplate(const ResourceTemplate& resourceTemplate)

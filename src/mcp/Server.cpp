@@ -484,6 +484,18 @@ public:
             size_t maxLen = flat.size() - start;
             size_t take = lengthOpt.has_value() ? static_cast<size_t>(lengthOpt.value()) : maxLen;
             if (take > maxLen) { take = maxLen; }
+            // Enforce hard clamp if advertised via capabilities.experimental.resourceReadChunking.maxChunkBytes
+            size_t clampBytes = 0;
+            auto itExp = capabilities.experimental.find("resourceReadChunking");
+            if (itExp != capabilities.experimental.end() && std::holds_alternative<JSONValue::Object>(itExp->second.value)) {
+                const auto& expObj = std::get<JSONValue::Object>(itExp->second.value);
+                auto itMax = expObj.find("maxChunkBytes");
+                if (itMax != expObj.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
+                    int64_t v = std::get<int64_t>(itMax->second->value);
+                    if (v > 0) clampBytes = static_cast<size_t>(v);
+                }
+            }
+            if (clampBytes > 0 && take > clampBytes) { take = clampBytes; }
             std::string slice = flat.substr(start, take);
             JSONValue::Object t; t["type"] = std::make_shared<JSONValue>(std::string("text")); t["text"] = std::make_shared<JSONValue>(slice);
             contents.push_back(std::make_shared<JSONValue>(JSONValue{t}));
@@ -1655,6 +1667,26 @@ ServerCapabilities Server::GetCapabilities() const {
 void Server::SetCapabilities(const ServerCapabilities& capabilities) {
     FUNC_SCOPE();
     pImpl->capabilities = capabilities;
+}
+
+void Server::SetResourceReadChunkingMaxBytes(const std::optional<size_t>& maxBytes) {
+    FUNC_SCOPE();
+    // Ensure experimental.resourceReadChunking object exists and set enabled=true
+    JSONValue::Object rrc;
+    auto it = pImpl->capabilities.experimental.find("resourceReadChunking");
+    if (it != pImpl->capabilities.experimental.end() && std::holds_alternative<JSONValue::Object>(it->second.value)) {
+        rrc = std::get<JSONValue::Object>(it->second.value);
+    }
+    rrc["enabled"] = std::make_shared<JSONValue>(true);
+    // maxChunkBytes: only advertise when > 0; absence or 0 means no clamp is enforced
+    if (maxBytes.has_value() && maxBytes.value() > 0) {
+        rrc["maxChunkBytes"] = std::make_shared<JSONValue>(static_cast<int64_t>(maxBytes.value()));
+    } else {
+        // Remove the field if present
+        auto itMax = rrc.find("maxChunkBytes");
+        if (itMax != rrc.end()) rrc.erase(itMax);
+    }
+    pImpl->capabilities.experimental["resourceReadChunking"] = JSONValue{rrc};
 }
 
 // Server factory implementation

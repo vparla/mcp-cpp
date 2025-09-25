@@ -79,20 +79,28 @@ inline ReadResourceResult doReadAllResourceInChunks(IClient& client,
         if (part.contents.empty()) {
             break;
         }
-        for (auto& v : part.contents) { agg.contents.push_back(std::move(v)); }
-        bool lastPartial = false;
-        if (!part.contents.empty()) {
-            const auto& last = part.contents.back();
-            if (std::holds_alternative<JSONValue::Object>(last.value)) {
-                const auto& o = std::get<JSONValue::Object>(last.value);
+        // Append to aggregate and compute the actual returned byte count to advance offset by.
+        size_t returnedBytes = 0;
+        for (auto& v : part.contents) {
+            if (std::holds_alternative<JSONValue::Object>(v.value)) {
+                const auto& o = std::get<JSONValue::Object>(v.value);
+                auto itType = o.find("type");
                 auto itText = o.find("text");
-                if (itText != o.end() && itText->second && std::holds_alternative<std::string>(itText->second->value)) {
-                    lastPartial = (std::get<std::string>(itText->second->value).size() < chunkSize);
+                if (itType != o.end() && itText != o.end() && itType->second && itText->second &&
+                    std::holds_alternative<std::string>(itType->second->value) &&
+                    std::get<std::string>(itType->second->value) == std::string("text") &&
+                    std::holds_alternative<std::string>(itText->second->value)) {
+                    returnedBytes += std::get<std::string>(itText->second->value).size();
                 }
             }
+            agg.contents.push_back(std::move(v));
         }
-        offset += chunkSize;
-        if (lastPartial) break;
+        if (returnedBytes == 0) {
+            // Defensive: if server returned non-text content for a range (shouldn't happen as client would throw),
+            // or returned empty text, stop to avoid infinite loop.
+            break;
+        }
+        offset += returnedBytes;
     }
     return agg;
 }

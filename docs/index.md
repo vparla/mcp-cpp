@@ -18,6 +18,7 @@ Contents:
  - Paging (Client API): see [README.md#paging](../README.md#paging)
  - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)
 - Keepalive & Logging (Server API): see [docs/api/server.md](./api/server.md#keepalive--heartbeat) and [docs/api/server.md](./api/server.md#logging-to-client)
+- Resource Read Chunking (experimental): see [docs/api/server.md](./api/server.md#resource-read-chunking-experimental) and [docs/api/typed.md](./api/typed.md#range-reads-and-chunk-helpers)
 - Parity Matrix: see [docs/parity-matrix.md](./parity-matrix.md)
 - SDK Comparison: see [docs/cpp-sdk-comparison.md](./cpp-sdk-comparison.md)
 - Typed Client Wrappers: see [docs/api/typed.md](./api/typed.md)
@@ -69,6 +70,7 @@ The MCP specification allows non-standard extensions to be advertised under `cap
   - `capabilities.experimental.keepalive` (server → client): see [Keepalive](./api/server.md#keepalive--heartbeat)
   - `capabilities.experimental.loggingRateLimit` (server → client): see [Logging rate limiting](./api/server.md#logging-rate-limiting-experimental)
   - `capabilities.experimental.logLevel` (client → server minimum log level): see [Logging to client](./api/server.md#logging-to-client)
+  - `capabilities.experimental.resourceReadChunking` (server → client): see [Resource read chunking](./api/server.md#resource-read-chunking-experimental)
 
 These experimental keys are a standard extension mechanism within MCP and do not change the core protocol messages; they provide optional behaviors that can evolve without breaking existing clients.
 
@@ -86,6 +88,7 @@ These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD]
 - `examples/mcp_server` and `examples/mcp_client`: Demo server and client wired over stdio (used by `scripts/run_demo.sh`).
 - `examples/subscriptions_progress`: Demonstrates per-URI resource subscriptions and server progress notifications using `InMemoryTransport`.
 - `examples/stdio_smoke`: Minimal Windows-native smoke that exercises `StdioTransport` start/stop paths.
+- `examples/resource_chunking`: Demonstrates experimental resource range reads and reassembly via typed wrappers.
 
 ## Coding style checklist
 

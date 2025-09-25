@@ -194,6 +194,11 @@ wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dock
 wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
 ```
 
+## Examples
+
+- `examples/typed_quickstart` — minimal end-to-end usage of typed wrappers (tools/resources/prompts).
+- `examples/resource_chunking` — demonstrates experimental resource range reads (offset/length) and reassembly of chunks. If the server advertises `capabilities.experimental.resourceReadChunking.maxChunkBytes`, returned slices are hard-clamped to that size; the example shows how to reassemble correctly using typed helpers.
+
 ## License
 
 MIT

@@ -403,6 +403,18 @@ public:
     //==========================================================================================================
     virtual void SetCapabilities(const ServerCapabilities& capabilities) = 0;
 
+    //==========================================================================================================
+    // Configures the experimental resource read chunking clamp (max bytes per slice). When set to a positive
+    // value, the server will clamp ranged reads to at most this many bytes per returned slice and advertise the
+    // value under capabilities.experimental.resourceReadChunking.maxChunkBytes. When unset or set to 0, the
+    // server continues to advertise resourceReadChunking.enabled=true but does not enforce a clamp.
+    // Args:
+    //   maxBytes: Optional maximum bytes per slice; disables clamp when not set or 0.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetResourceReadChunkingMaxBytes(const std::optional<size_t>& maxBytes) = 0;
+
     ////////////////////////////////////////// Validation (opt-in) /////////////////////////////////////////////
     //==========================================================================================================
     // Configures runtime schema validation for server-side request/response handling. Default: Off (no-op).
@@ -495,6 +507,7 @@ public:
     // Server capabilities
     ServerCapabilities GetCapabilities() const override;
     void SetCapabilities(const ServerCapabilities& capabilities) override;
+    void SetResourceReadChunkingMaxBytes(const std::optional<size_t>& maxBytes) override;
 
     // Validation (opt-in)
     void SetValidationMode(validation::ValidationMode mode) override;

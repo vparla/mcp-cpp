@@ -42,6 +42,12 @@ This page summarizes the public client APIs with signatures and brief descriptio
   - Paged listing for resources.
 - std::future<JSONValue> ReadResource(const std::string& uri)
   - Read resource contents; result contains a contents array.
+- std::future<JSONValue> ReadResource(const std::string& uri,
+                                     const std::optional<int64_t>& offset,
+                                     const std::optional<int64_t>& length)
+  - Experimental range read: when provided, the server slices text content to the requested range and returns the same result shape as a normal read.
+  - The server may enforce a hard clamp per slice using `capabilities.experimental.resourceReadChunking.maxChunkBytes`, returning at most that many bytes regardless of the requested `length`.
+  - See typed helpers for ergonomics: `typed::readResourceRange(...)` and `typed::readAllResourceInChunks(...)` in [docs/api/typed.md](./typed.md). The chunk helper advances by the actual returned bytes to remain correct under server clamping.
 
 ## Resource templates
 - std::future<std::vector<ResourceTemplate>> ListResourceTemplates()
