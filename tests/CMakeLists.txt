@@ -47,6 +47,7 @@ add_executable(mcp_tests
   test_negative_api.cpp
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp
+  test_resource_read_chunking_overload.cpp
 )
 
 target_link_libraries(mcp_tests

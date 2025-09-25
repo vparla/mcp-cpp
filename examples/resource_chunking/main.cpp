@@ -47,6 +47,8 @@ int main() {
         });
     });
 
+    // Configure a server-side clamp and start server so it's advertised during initialize
+    server.SetResourceReadChunkingMaxBytes(3);
     // Start server
     server.Start(std::move(serverTrans)).get();
 
@@ -55,9 +57,21 @@ int main() {
     Implementation ci{"ChunkCli", "1.0"};
     auto client = f.CreateClient(ci);
     client->Connect(std::move(clientTrans)).get();
-    ClientCapabilities caps; (void)client->Initialize(ci, caps).get();
+    ClientCapabilities caps; ServerCapabilities scaps = client->Initialize(ci, caps).get();
 
-    // Demonstrate reading a slice: offset=3, length=4 => DEFG
+    // Extract clamp hint from capabilities
+    std::optional<size_t> clampHint;
+    auto it = scaps.experimental.find("resourceReadChunking");
+    if (it != scaps.experimental.end() && std::holds_alternative<mcp::JSONValue::Object>(it->second.value)) {
+        const auto& rrc = std::get<mcp::JSONValue::Object>(it->second.value);
+        auto itMax = rrc.find("maxChunkBytes");
+        if (itMax != rrc.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
+            auto v = static_cast<size_t>(std::get<int64_t>(itMax->second->value));
+            if (v > 0) clampHint = v;
+        }
+    }
+
+    // Demonstrate reading a slice: offset=3, length=4 (will be clamped to 3 bytes by server)
     ReadResourceResult slice = typed::readResourceRange(*client, uri, std::optional<int64_t>(3), std::optional<int64_t>(4)).get();
     std::cout << "Slice [3..7): ";
     for (const auto& s : typed::collectText(slice)) std::cout << s;
@@ -65,26 +79,10 @@ int main() {
 
     // Demonstrate reading an entire resource in fixed-size chunks and reassembling
     const size_t chunkSize = 8;
-    ReadResourceResult agg = typed::readAllResourceInChunks(*client, uri, chunkSize).get();
+    ReadResourceResult agg = typed::readAllResourceInChunks(*client, uri, chunkSize, clampHint).get();
     std::string all;
     for (const auto& s : typed::collectText(agg)) all += s;
-    std::cout << "Reassembled (chunkSize=" << chunkSize << "): " << all << "\n";
-
-    // Now configure a server-side clamp smaller than the requested chunk size
-    // Note: Changing clamp after initialize does not update the advertisement; enforcement still applies.
-    server.SetResourceReadChunkingMaxBytes(3);
-
-    // Demonstrate clamped range: request length=10 from offset=5 -> expect only 3 bytes returned
-    ReadResourceResult clampedSlice = typed::readResourceRange(*client, uri, std::optional<int64_t>(5), std::optional<int64_t>(10)).get();
-    std::cout << "Clamped slice [5..): ";
-    for (const auto& s : typed::collectText(clampedSlice)) std::cout << s; // prints 3 bytes
-    std::cout << "\n";
-
-    // Demonstrate reassembly still works when server clamp < requested chunk size
-    ReadResourceResult clampedAgg = typed::readAllResourceInChunks(*client, uri, /*chunkSize*/ 8).get();
-    std::string clampedAll;
-    for (const auto& s : typed::collectText(clampedAgg)) clampedAll += s;
-    std::cout << "Reassembled under clamp (maxChunkBytes=3, requested chunkSize=8): " << clampedAll << "\n";
+    std::cout << "Reassembled (preferred chunkSize=" << chunkSize << ", clamp=" << (clampHint ? std::to_string(*clampHint) : std::string("none")) << "): " << all << "\n";
 
     client->Disconnect().get();
     server.Stop().get();

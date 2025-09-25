@@ -80,11 +80,33 @@ std::string all;
 for (const auto& s : typed::collectText(agg)) all += s;
 ```
 
+Clamp-aware overload example:
+
+```cpp
+// If the server advertises a clamp in capabilities.experimental.resourceReadChunking.maxChunkBytes,
+// use the clamp-aware overload to minimize round-trips by picking min(preferred, clamp).
+
+ServerCapabilities scaps = client->Initialize(ci, caps).get();
+std::optional<size_t> clampHint;
+auto it = scaps.experimental.find("resourceReadChunking");
+if (it != scaps.experimental.end() && std::holds_alternative<mcp::JSONValue::Object>(it->second.value)) {
+  const auto& rrc = std::get<mcp::JSONValue::Object>(it->second.value);
+  auto itMax = rrc.find("maxChunkBytes");
+  if (itMax != rrc.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
+    auto v = static_cast<size_t>(std::get<int64_t>(itMax->second->value));
+    if (v > 0) clampHint = v;
+  }
+}
+
+ReadResourceResult agg2 = typed::readAllResourceInChunks(*client, "mem://doc", /*preferredChunkSize*/ 8192, clampHint).get();
+```
+
 Notes:
 
 - Range slicing is applied server-side to text content; the result shape remains identical to a normal read (contents array).
 - See server-side details in [docs/api/server.md](./server.md#resource-read-chunking-experimental).
 - If the server advertises `capabilities.experimental.resourceReadChunking.maxChunkBytes`, it may clamp each returned slice to at most that many bytes. The `readAllResourceInChunks` helper automatically advances the offset by the actual returned bytes so it remains correct even when the server clamp is smaller than the requested `chunkSize`.
+- When using the clamp-aware overload, the helper selects `min(preferredChunkSize, clampHint)` as the effective chunk size to reduce the number of ranged reads.
 
 ## Error handling
 

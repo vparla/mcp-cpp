@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 #include "mcp/Client.h"
 #include "mcp/Protocol.h"
@@ -109,6 +110,20 @@ inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
                                                                const std::string& uri,
                                                                size_t chunkSize) {
     return std::async(std::launch::async, doReadAllResourceInChunks, std::ref(client), uri, chunkSize);
+}
+
+// Overload: clamp-aware; uses min(preferredChunkSize, serverClampHint) when clamp is present
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t preferredChunkSize,
+                                                               const std::optional<size_t>& serverClampHint) {
+    return std::async(std::launch::async, [&client, uri, preferredChunkSize, serverClampHint]() {
+        size_t effective = preferredChunkSize;
+        if (serverClampHint.has_value() && serverClampHint.value() > 0) {
+            effective = std::min(preferredChunkSize, serverClampHint.value());
+        }
+        return doReadAllResourceInChunks(client, uri, effective);
+    });
 }
 
 inline CallToolResult parseCallToolResult(const JSONValue& v) {
