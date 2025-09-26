@@ -90,6 +90,7 @@ if(MCP_BUILD_EXAMPLES)
   add_subdirectory(examples/resource_chunking)
   add_subdirectory(examples/sampling_roundtrip)
   add_subdirectory(examples/logging_demo)
+  add_subdirectory(examples/keepalive_demo)
 endif()
 
 # Tests (to be implemented in a later step)

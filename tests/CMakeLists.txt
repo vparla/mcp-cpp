@@ -36,6 +36,7 @@ add_executable(mcp_tests
   test_capabilities_logging.cpp
   test_server_initiated_sampling.cpp
   test_sampling_typed_helpers.cpp
+  test_sampling_result_builder.cpp
   test_cancellation.cpp
   test_initialize_notifications.cpp
   test_errors.cpp

@@ -132,6 +132,20 @@ client->SetSamplingHandler([](const JSONValue& messages,
 
 For a runnable end-to-end demo, see `examples/sampling_roundtrip`.
 
+Builder variant:
+
+```cpp
+#include "mcp/typed/Sampling.h"
+
+using mcp::typed::SamplingResultBuilder;
+
+SamplingResultBuilder b;
+JSONValue result = b.setModel("example-model")
+                    .setRole("assistant")
+                    .addText("hello from client")
+                    .build();
+```
+
 ## Prompt builders
 
 You can build prompt arguments and simple message arrays using `Prompts.h`:

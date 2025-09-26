@@ -31,14 +31,18 @@ int main() {
     auto client = factory.CreateClient(info);
     client->Connect(std::move(clientTrans)).get();
 
-    // Register client sampling handler using typed helper to build a result
+    // Register client sampling handler using typed SamplingResultBuilder to build a result
     client->SetSamplingHandler([](const JSONValue& messages,
                                   const JSONValue& modelPreferences,
                                   const JSONValue& systemPrompt,
                                   const JSONValue& includeContext){
         (void)messages; (void)modelPreferences; (void)systemPrompt; (void)includeContext;
         return std::async(std::launch::deferred, [](){
-            return mcp::typed::makeTextSamplingResult("example-model", "assistant", "hello from client");
+            mcp::typed::SamplingResultBuilder b;
+            return b.setModel("example-model")
+                    .setRole("assistant")
+                    .addText("hello from client")
+                    .build();
         });
     });
 

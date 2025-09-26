@@ -81,7 +81,6 @@ These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD]
 - `MCP_STDIOTRANSPORT_TIMEOUT_MS`: Default request timeout for `StdioTransport` (milliseconds). `0` disables.
 - `MCP_STDIO_CONFIG`: Pass stdio transport options as a `key=value` list (e.g., `timeout_ms`, `idle_read_timeout_ms`, `write_timeout_ms`, `write_queue_max_bytes`).
 - `MCP_KEEPALIVE_MS`: Enable periodic server keepalive notifications in the demo.
-- `DEMO_COLOR`: Set to `0` to disable colored output in demo scripts.
 
 ## Examples
 
@@ -89,11 +88,12 @@ These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD]
 - `examples/subscriptions_progress`: Demonstrates per-URI resource subscriptions and server progress notifications using `InMemoryTransport`.
 - `examples/stdio_smoke`: Minimal Windows-native smoke that exercises `StdioTransport` start/stop paths.
 - `examples/resource_chunking`: Demonstrates experimental resource range reads and reassembly via typed wrappers.
- - `examples/sampling_roundtrip`: Demonstrates server-initiated sampling using a typed helper result (`mcp/typed/Sampling.h`).
- - `examples/logging_demo`: Demonstrates server logging to client with minimum log level filtering and rate limiting.
+- `examples/sampling_roundtrip`: Demonstrates server-initiated sampling using a typed helper result (`mcp/typed/Sampling.h`).
+- `examples/logging_demo`: Demonstrates server logging to client with minimum log level filtering and rate limiting.
+- `examples/keepalive_demo`: Demonstrates keepalive notifications and failure handling.
 
 ## Coding style checklist
-
+{{ ... }}
 
 - Use C++20 and avoid busy loops; prefer async, futures/promises, and coroutines.
 - No third-party runtime deps; standard library and C-runtime only.

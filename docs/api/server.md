@@ -207,6 +207,8 @@ server.SetKeepaliveIntervalMs(100);
 server.SetKeepaliveIntervalMs(std::optional<int>(0));
 ```
 
+For a runnable example that prints keepalive notifications and simulates failures, see `examples/keepalive_demo`.
+
 ## Logging to client
 - std::future<void> LogToClient(const std::string& level, const std::string& message,
                                const std::optional<JSONValue>& data = std::nullopt)
