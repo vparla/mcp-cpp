@@ -67,7 +67,6 @@ using namespace mcp;
 
 // Read a 4-byte slice starting at offset 3
 ReadResourceResult slice = typed::readResourceRange(*client,
-                                                    "mem://doc",
                                                     std::optional<int64_t>(3),
                                                     std::optional<int64_t>(4)).get();
 for (const auto& s : typed::collectText(slice)) {
@@ -78,14 +77,23 @@ for (const auto& s : typed::collectText(slice)) {
 ReadResourceResult agg = typed::readAllResourceInChunks(*client, "mem://doc", /*chunkSize*/ 8192).get();
 std::string all;
 for (const auto& s : typed::collectText(agg)) all += s;
-```
 
-Clamp-aware overload example:
+// Cancel-aware variant
+#include <stop_token>
 
-```cpp
+std::stop_source src; auto tok = src.get_token();
+// Request cancellation from another thread or when some condition triggers
+// src.request_stop();
+
+ReadResourceResult partial = typed::readAllResourceInChunks(*client,
+                                                            "mem://doc",
+                                                            /*chunkSize*/ 8192,
+                                                            std::optional<std::stop_token>(tok)).get();
+
+// Clamp-aware overload example
 // If the server advertises a clamp in capabilities.experimental.resourceReadChunking.maxChunkBytes,
 // use the clamp-aware overload to minimize round-trips by picking min(preferred, clamp).
-
+{{ ... }}
 ServerCapabilities scaps = client->Initialize(ci, caps).get();
 std::optional<size_t> clampHint = typed::extractResourceReadClamp(scaps);
 
@@ -102,6 +110,27 @@ Notes:
 ## Error handling
 
 When the server returns a JSON-RPC error (e.g., `ToolNotFound`, `ResourceNotFound`, `PromptNotFound`, etc.), wrappers throw `std::runtime_error` with a readable message. If you prefer not to throw, you can use the underlying raw APIs and check result vs error manually.
+
+## Sampling helpers
+
+Typed helpers include a utility to easily construct a `sampling/createMessage` result with a single text content item.
+
+```cpp
+#include "mcp/typed/Sampling.h"
+
+// Register the client's sampling handler; build a result using the typed helper
+client->SetSamplingHandler([](const JSONValue& messages,
+                              const JSONValue& modelPreferences,
+                              const JSONValue& systemPrompt,
+                              const JSONValue& includeContext){
+  (void)messages; (void)modelPreferences; (void)systemPrompt; (void)includeContext;
+  return std::async(std::launch::deferred, [](){
+    return mcp::typed::makeTextSamplingResult("example-model", "assistant", "hello from client");
+  });
+});
+```
+
+For a runnable end-to-end demo, see `examples/sampling_roundtrip`.
 
 ## Prompt builders
 

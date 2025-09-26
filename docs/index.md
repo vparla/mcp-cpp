@@ -89,6 +89,8 @@ These environment variables influence runtime/demo behavior. See [BUILD+TEST.MD]
 - `examples/subscriptions_progress`: Demonstrates per-URI resource subscriptions and server progress notifications using `InMemoryTransport`.
 - `examples/stdio_smoke`: Minimal Windows-native smoke that exercises `StdioTransport` start/stop paths.
 - `examples/resource_chunking`: Demonstrates experimental resource range reads and reassembly via typed wrappers.
+ - `examples/sampling_roundtrip`: Demonstrates server-initiated sampling using a typed helper result (`mcp/typed/Sampling.h`).
+ - `examples/logging_demo`: Demonstrates server logging to client with minimum log level filtering and rate limiting.
 
 ## Coding style checklist
 

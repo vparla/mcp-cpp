@@ -35,6 +35,7 @@ add_executable(mcp_tests
   test_logging_rate_limit.cpp
   test_capabilities_logging.cpp
   test_server_initiated_sampling.cpp
+  test_sampling_typed_helpers.cpp
   test_cancellation.cpp
   test_initialize_notifications.cpp
   test_errors.cpp
@@ -48,6 +49,7 @@ add_executable(mcp_tests
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp
   test_resource_read_chunking_overload.cpp
+  test_typed_cancellation.cpp
 )
 
 target_link_libraries(mcp_tests

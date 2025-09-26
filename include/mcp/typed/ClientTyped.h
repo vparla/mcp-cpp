@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <stop_token>
 
 #include "mcp/Client.h"
 #include "mcp/Protocol.h"
@@ -122,10 +123,58 @@ inline ReadResourceResult doReadAllResourceInChunks(IClient& client,
     return agg;
 }
 
+// Cancel-aware variant: respects stopToken between chunked reads (does not cancel in-flight RPC)
+inline ReadResourceResult doReadAllResourceInChunksCancelable(IClient& client,
+                                                             const std::string& uri,
+                                                             size_t chunkSize,
+                                                             const std::optional<std::stop_token>& stopToken) {
+    if (chunkSize == 0) {
+        throw std::invalid_argument("chunkSize must be > 0");
+    }
+    ReadResourceResult agg; size_t offset = 0;
+    while (true) {
+        if (stopToken.has_value() && stopToken->stop_requested()) {
+            break;
+        }
+        auto part = readResourceRange(client, uri, static_cast<int64_t>(offset), static_cast<int64_t>(chunkSize)).get();
+        if (part.contents.empty()) {
+            break;
+        }
+        size_t returnedBytes = 0;
+        for (auto& v : part.contents) {
+            if (std::holds_alternative<JSONValue::Object>(v.value)) {
+                const auto& o = std::get<JSONValue::Object>(v.value);
+                auto itType = o.find("type");
+                auto itText = o.find("text");
+                if (itType != o.end() && itText != o.end() && itType->second && itText->second &&
+                    std::holds_alternative<std::string>(itType->second->value) &&
+                    std::get<std::string>(itType->second->value) == std::string("text") &&
+                    std::holds_alternative<std::string>(itText->second->value)) {
+                    returnedBytes += std::get<std::string>(itText->second->value).size();
+                }
+            }
+            agg.contents.push_back(std::move(v));
+        }
+        if (returnedBytes == 0) {
+            break;
+        }
+        offset += returnedBytes;
+    }
+    return agg;
+}
+
 inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
                                                                const std::string& uri,
                                                                size_t chunkSize) {
     return std::async(std::launch::async, doReadAllResourceInChunks, std::ref(client), uri, chunkSize);
+}
+
+// Overload: cancel-aware using std::stop_token (checked between chunk requests)
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t chunkSize,
+                                                               const std::optional<std::stop_token>& stopToken) {
+    return std::async(std::launch::async, doReadAllResourceInChunksCancelable, std::ref(client), uri, chunkSize, stopToken);
 }
 
 // Overload: clamp-aware; uses min(preferredChunkSize, serverClampHint) when clamp is present
@@ -142,6 +191,21 @@ inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
     });
 }
 
+// Overload: clamp + cancel-aware
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t preferredChunkSize,
+                                                               const std::optional<size_t>& serverClampHint,
+                                                               const std::optional<std::stop_token>& stopToken) {
+    return std::async(std::launch::async, [&client, uri, preferredChunkSize, serverClampHint, stopToken]() {
+        size_t effective = preferredChunkSize;
+        if (serverClampHint.has_value() && serverClampHint.value() > 0) {
+            effective = std::min(preferredChunkSize, serverClampHint.value());
+        }
+        return doReadAllResourceInChunksCancelable(client, uri, effective, stopToken);
+    });
+}
+
 // Overload: accepts ServerCapabilities and derives clamp via extractResourceReadClamp
 inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
                                                                const std::string& uri,
@@ -149,6 +213,16 @@ inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
                                                                const ServerCapabilities& scaps) {
     auto clampHint = extractResourceReadClamp(scaps);
     return readAllResourceInChunks(client, uri, preferredChunkSize, clampHint);
+}
+
+// Overload: accepts ServerCapabilities and stop token
+inline std::future<ReadResourceResult> readAllResourceInChunks(IClient& client,
+                                                               const std::string& uri,
+                                                               size_t preferredChunkSize,
+                                                               const ServerCapabilities& scaps,
+                                                               const std::optional<std::stop_token>& stopToken) {
+    auto clampHint = extractResourceReadClamp(scaps);
+    return readAllResourceInChunks(client, uri, preferredChunkSize, clampHint, stopToken);
 }
 
 inline CallToolResult parseCallToolResult(const JSONValue& v) {

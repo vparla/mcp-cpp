@@ -88,6 +88,8 @@ if(MCP_BUILD_EXAMPLES)
   add_subdirectory(examples/subscriptions_progress)
   add_subdirectory(examples/typed_quickstart)
   add_subdirectory(examples/resource_chunking)
+  add_subdirectory(examples/sampling_roundtrip)
+  add_subdirectory(examples/logging_demo)
 endif()
 
 # Tests (to be implemented in a later step)
