@@ -46,6 +46,9 @@ add_executable(mcp_tests
   test_validation_sampling.cpp
   test_validation_prompts.cpp
   test_client_cache.cpp
+  test_client_cache_extended.cpp
+  test_prompt_pre_dispatch_cancel.cpp
+  test_keepalive_threshold_config.cpp
   test_negative_api.cpp
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp

@@ -178,40 +178,42 @@ Tests:
 - std::vector<Prompt> ListPrompts()
 - std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments)
 
-## Sampling
 - void SetSamplingHandler(SamplingHandler handler)
   - Register a server-side handler for `sampling/createMessage`.
 - std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params)
   - Request the client to create a message (server-initiated sampling path).
 
-## Keepalive / Heartbeat
-- void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs)
+ ## Keepalive / Heartbeat
+ - void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs)
   - Enable periodic `notifications/keepalive` when > 0; disables when not set or <= 0.
+ - void SetKeepaliveFailureThreshold(const std::optional<unsigned int>& threshold)
+  - Configure the number of consecutive keepalive send failures before closing the transport (min 1; default 3).
 
-Details:
+ Details:
 
-- When enabled, the server advertises an experimental capability in initialize response under `capabilities.experimental.keepalive` with fields:
+ - When enabled, the server advertises an experimental capability in initialize response under `capabilities.experimental.keepalive` with fields:
   - `enabled: true`
   - `intervalMs: number` (the configured interval)
   - `failureThreshold: number` (consecutive send failures before transport is closed)
 - If keepalive is disabled (`intervalMs` unset or <= 0), the advertisement is removed.
 - Consecutive failures to send keepalive notifications are tracked; once the threshold is reached the server will close the transport and invoke the error handler.
+- The threshold can be updated at runtime via `SetKeepaliveFailureThreshold(...)`. When keepalive is enabled, the advertisement is refreshed to reflect the new threshold.
 
-Example:
+ Example:
 
-```cpp
-// Enable 100ms cadence
-server.SetKeepaliveIntervalMs(100);
+ ```cpp
+ // Enable 100ms cadence and set custom failure threshold
+ server.SetKeepaliveIntervalMs(100);
+ server.SetKeepaliveFailureThreshold(5);
 
-// Disable later
-server.SetKeepaliveIntervalMs(std::optional<int>(0));
-```
+ // Disable later
+ server.SetKeepaliveIntervalMs(std::optional<int>(0));
+ ```
 
 For a runnable example that prints keepalive notifications and simulates failures, see `examples/keepalive_demo`.
 
 ## Logging to client
 - std::future<void> LogToClient(const std::string& level, const std::string& message,
-                               const std::optional<JSONValue>& data = std::nullopt)
   - Sends `notifications/log` with level/message/data; suppressed if below client-advertised log level (`capabilities.experimental.logLevel`).
 
 Details:

@@ -273,6 +273,19 @@ public:
     //==========================================================================================================
     virtual void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) = 0;
 
+    //==========================================================================================================
+    // Configures the consecutive keepalive send-failure threshold before closing the transport.
+    // When the number of consecutive failed keepalive sends reaches this threshold, the server will close
+    // the transport and invoke the error callback. Minimum value is 1; values < 1 are clamped to 1.
+    // The effective value is advertised under `capabilities.experimental.keepalive.failureThreshold` during
+    // initialize whenever keepalive is enabled.
+    // Args:
+    //   threshold: Optional threshold (>= 1). If not set, a sensible default is used.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetKeepaliveFailureThreshold(const std::optional<unsigned int>& threshold) = 0;
+
     /////////////////////////////////////////// Logging rate limiting //////////////////////////////////////////
     //==========================================================================================================
     // Configures a simple per-second throttle for notifications/log. When set to a positive value, the server
@@ -479,6 +492,7 @@ public:
 
     // Keepalive / Heartbeat
     void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) override;
+    void SetKeepaliveFailureThreshold(const std::optional<unsigned int>& threshold) override;
 
     // Logging rate limiting
     void SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& perSecond) override;

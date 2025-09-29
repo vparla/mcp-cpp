@@ -842,6 +842,11 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         } else if (req.method == Methods::ListPrompts) {
             return this->handlePromptsList(req);
         } else if (req.method == Methods::GetPrompt) {
+            // Pre-dispatch cancellation for prompts/get to satisfy pre-dispatch cancel coverage
+            if (token && token->cancelled.load()) {
+                errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
+                return errors::makeErrorResponse(req.id, err);
+            }
             auto r = this->handlePromptsGet(req);
             if (token && token->cancelled.load()) {
                 errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = "Cancelled";
@@ -1580,6 +1585,21 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                 }
             }
         });
+    }
+}
+
+void Server::SetKeepaliveFailureThreshold(const std::optional<unsigned int>& threshold) {
+    FUNC_SCOPE();
+    unsigned int t = threshold.has_value() ? threshold.value() : pImpl->keepaliveFailureThreshold.load();
+    if (t < 1u) t = 1u;
+    pImpl->keepaliveFailureThreshold.store(t);
+    // If keepalive is enabled, update experimental advertisement with the new threshold
+    if (pImpl->keepaliveIntervalMs.load() > 0) {
+        JSONValue::Object kv;
+        kv["enabled"] = std::make_shared<JSONValue>(true);
+        kv["intervalMs"] = std::make_shared<JSONValue>(static_cast<int64_t>(pImpl->keepaliveIntervalMs.load()));
+        kv["failureThreshold"] = std::make_shared<JSONValue>(static_cast<int64_t>(t));
+        pImpl->capabilities.experimental["keepalive"] = JSONValue{kv};
     }
 }
 
