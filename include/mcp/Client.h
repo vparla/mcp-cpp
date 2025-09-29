@@ -16,6 +16,7 @@
 #include <vector>
 #include <future>
 #include <functional>
+#include <stop_token>
 
 namespace mcp {
 
@@ -249,6 +250,17 @@ public:
         const JSONValue& includeContext)>;
     virtual void SetSamplingHandler(SamplingHandler handler) = 0;
 
+    // Optional cancelable sampling handler variant that receives a std::stop_token.
+    // When set, this handler will be used instead of the non-cancelable variant for
+    // servicing server-initiated sampling/createMessage requests.
+    using SamplingHandlerCancelable = std::function<std::future<JSONValue>(
+        const JSONValue& messages,
+        const JSONValue& modelPreferences,
+        const JSONValue& systemPrompt,
+        const JSONValue& includeContext,
+        std::stop_token st)>;
+    virtual void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) = 0;
+
     ////////////////////////////////////////// Notification handlers ///////////////////////////////////////////
     //==========================================================================================================
     // Registers a notification handler for a specific method name.
@@ -368,6 +380,7 @@ public:
                                     const JSONValue& arguments) override;
 
     void SetSamplingHandler(SamplingHandler handler) override;
+    void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) override;
 
     void SetNotificationHandler(const std::string& method, NotificationHandler handler) override;
     void RemoveNotificationHandler(const std::string& method) override;

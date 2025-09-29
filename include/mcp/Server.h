@@ -323,6 +323,18 @@ public:
     //==========================================================================================================
     virtual std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) = 0;
 
+    //==========================================================================================================
+    // Requests the client to create a message (server-initiated sampling) with a caller-provided request id.
+    // Useful for tests and cancellation E2E scenarios where the server needs to cancel an in-flight request by id.
+    // Args:
+    //   params: CreateMessage parameters.
+    //   requestId: Caller-provided id to assign to the JSON-RPC request.
+    // Returns:
+    //   Future with raw JSON result from the client's handler.
+    //==========================================================================================================
+    virtual std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params,
+                                                             const std::string& requestId) = 0;
+
     /////////////////////////////////////////// Notification sending ///////////////////////////////////////////
     //==========================================================================================================
     // Sends an arbitrary JSON-RPC notification (method + params) to the client.
@@ -504,6 +516,8 @@ public:
 
     // Server-initiated sampling (request client to create a message)
     std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) override;
+    std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params,
+                                                     const std::string& requestId) override;
 
     // IServer message sending
     std::future<void> SendNotification(const std::string& method, const JSONValue& params) override;

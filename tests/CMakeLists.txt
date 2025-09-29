@@ -41,6 +41,7 @@ add_executable(mcp_tests
   test_initialize_notifications.cpp
   test_errors.cpp
   test_client_typed.cpp
+  test_sampling_cancellation_e2e.cpp
   test_validation_mode.cpp
   test_validation_lists.cpp
   test_validation_sampling.cpp

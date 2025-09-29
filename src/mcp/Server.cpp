@@ -30,7 +30,7 @@ namespace mcp {
 
 // Server implementation
 class Server::Impl {
-public:
+private:
     friend class Server;
     // Coroutine helpers (declarations)
     mcp::async::Task<void> coStart(std::unique_ptr<ITransport> transport);
@@ -40,6 +40,7 @@ public:
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri);
     mcp::async::Task<JSONValue> coGetPrompt(const std::string& name, const JSONValue& arguments);
     mcp::async::Task<JSONValue> coRequestCreateMessage(const CreateMessageParams& params);
+    mcp::async::Task<JSONValue> coRequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId);
     mcp::async::Task<void> coSendNotification(const std::string& method, const JSONValue& params);
     mcp::async::Task<void> coNotifyResourcesListChanged();
     mcp::async::Task<void> coNotifyToolsListChanged();
@@ -1277,8 +1278,64 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessage(const CreateMes
     co_return JSONValue{};
 }
 
+mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId) {
+    FUNC_SCOPE();
+    if (!this->transport) {
+        LOG_ERROR("RequestCreateMessageWithId called without transport");
+        co_return JSONValue{};
+    }
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::CreateMessage;
+    request->id = requestId; // assign caller-provided id so cancellation can target this request
+    JSONValue::Object obj;
+    // messages (array)
+    JSONValue::Array msgs;
+    msgs.reserve(params.messages.size());
+    for (const auto& m : params.messages) msgs.push_back(std::make_shared<JSONValue>(m));
+    obj["messages"] = std::make_shared<JSONValue>(msgs);
+    // Optional fields
+    if (params.modelPreferences.has_value()) {
+        obj["modelPreferences"] = std::make_shared<JSONValue>(params.modelPreferences.value());
+    }
+    if (params.systemPrompt.has_value()) {
+        obj["systemPrompt"] = std::make_shared<JSONValue>(params.systemPrompt.value());
+    }
+    if (params.includeContext.has_value()) {
+        obj["includeContext"] = std::make_shared<JSONValue>(params.includeContext.value());
+    }
+    if (params.maxTokens.has_value()) {
+        obj["maxTokens"] = std::make_shared<JSONValue>(static_cast<int64_t>(params.maxTokens.value()));
+    }
+    if (params.temperature.has_value()) {
+        obj["temperature"] = std::make_shared<JSONValue>(params.temperature.value());
+    }
+    if (params.stopSequences.has_value()) {
+        JSONValue::Array arr;
+        for (const auto& s : params.stopSequences.value()) {
+            arr.push_back(std::make_shared<JSONValue>(s));
+        }
+        obj["stopSequences"] = std::make_shared<JSONValue>(arr);
+    }
+    if (params.metadata.has_value()) {
+        obj["metadata"] = std::make_shared<JSONValue>(params.metadata.value());
+    }
+    request->params = JSONValue{obj};
+
+    auto fut = this->transport->SendRequest(std::move(request));
+    try {
+        auto resp = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (resp) {
+            if (resp->result.has_value()) co_return resp->result.value();
+            if (resp->error.has_value()) co_return resp->error.value();
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("RequestCreateMessageWithId exception: {}", e.what());
+    }
+    co_return JSONValue{};
+}
+
 Server::Server(const std::string& serverInfo)
-    : pImpl(std::make_unique<Impl>()) {
+    : pImpl(std::unique_ptr<Impl>(new Impl())) {
     FUNC_SCOPE();
     pImpl->serverInfo = serverInfo;
 }
@@ -1635,6 +1692,11 @@ void Server::SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& per
 std::future<JSONValue> Server::RequestCreateMessage(const CreateMessageParams& params) {
     FUNC_SCOPE();
     return pImpl->coRequestCreateMessage(params).toFuture();
+}
+
+std::future<JSONValue> Server::RequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId) {
+    FUNC_SCOPE();
+    return pImpl->coRequestCreateMessageWithId(params, requestId).toFuture();
 }
 
 void Server::RegisterResourceTemplate(const ResourceTemplate& resourceTemplate) {

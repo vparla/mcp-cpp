@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <algorithm>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -26,7 +27,7 @@ namespace mcp {
 
 // Client implementation
 class Client::Impl {
-public:
+private:
     friend class Client; // Allow outer Client to invoke private coroutine helpers
     std::unique_ptr<ITransport> transport;
     ClientCapabilities capabilities;
@@ -37,6 +38,7 @@ public:
     IClient::ProgressHandler progressHandler;
     IClient::ErrorHandler errorHandler;
     IClient::SamplingHandler samplingHandler;
+    IClient::SamplingHandlerCancelable samplingHandlerCancelable;
     validation::ValidationMode validationMode{validation::ValidationMode::Off};
 
     // Listings cache (optional)
@@ -46,6 +48,85 @@ public:
     struct ResourcesCache { std::vector<Resource> data; std::chrono::steady_clock::time_point ts; bool set{false}; } resourcesCache;
     struct TemplatesCache { std::vector<ResourceTemplate> data; std::chrono::steady_clock::time_point ts; bool set{false}; } templatesCache;
     struct PromptsCache { std::vector<Prompt> data; std::chrono::steady_clock::time_point ts; bool set{false}; } promptsCache;
+
+    // Cancellation support for server->client requests (e.g., sampling/createMessage)
+    struct CancellationToken { std::atomic<bool> cancelled{false}; };
+    std::mutex cancelMutex;
+    std::unordered_map<std::string, std::shared_ptr<CancellationToken>> cancelMap;
+    std::unordered_map<std::string, std::vector<std::shared_ptr<std::stop_source>>> stopSources;
+
+    static std::string idToString(const JSONRPCId& id) {
+        std::string idStr;
+        std::visit([&](const auto& v){
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, std::string>) { idStr = v; }
+            else if constexpr (std::is_same_v<T, int64_t>) { idStr = std::to_string(v); }
+            else { idStr = ""; }
+        }, id);
+        return idStr;
+    }
+
+    static std::string parseIdFromParams(const JSONValue& params) {
+        std::string idStr;
+        if (std::holds_alternative<JSONValue::Object>(params.value)) {
+            const auto& o = std::get<JSONValue::Object>(params.value);
+            auto it = o.find("id");
+            if (it != o.end() && it->second) {
+                if (std::holds_alternative<std::string>(it->second->value)) idStr = std::get<std::string>(it->second->value);
+                else if (std::holds_alternative<int64_t>(it->second->value)) idStr = std::to_string(std::get<int64_t>(it->second->value));
+            }
+        }
+        return idStr;
+    }
+
+    std::shared_ptr<CancellationToken> registerCancelToken(const std::string& idStr) {
+        if (idStr.empty()) return std::make_shared<CancellationToken>();
+        std::lock_guard<std::mutex> lk(cancelMutex);
+        auto it = cancelMap.find(idStr);
+        if (it != cancelMap.end()) return it->second;
+        auto tok = std::make_shared<CancellationToken>();
+        cancelMap[idStr] = tok;
+        return tok;
+    }
+    void unregisterCancelToken(const std::string& idStr) {
+        if (idStr.empty()) return;
+        std::lock_guard<std::mutex> lk(cancelMutex);
+        cancelMap.erase(idStr);
+        stopSources.erase(idStr);
+    }
+    void cancelById(const std::string& idStr) {
+        std::lock_guard<std::mutex> lk(cancelMutex);
+        auto it = cancelMap.find(idStr);
+        if (it == cancelMap.end() || !it->second) {
+            auto tok = std::make_shared<CancellationToken>();
+            tok->cancelled.store(true);
+            cancelMap[idStr] = tok;
+        } else {
+            it->second->cancelled.store(true);
+        }
+        auto itS = stopSources.find(idStr);
+        if (itS != stopSources.end()) {
+            for (auto& src : itS->second) { if (src) { try { src->request_stop(); } catch (...) {} } }
+        }
+    }
+    std::shared_ptr<std::stop_source> registerStopSource(const std::string& idStr) {
+        auto src = std::make_shared<std::stop_source>();
+        std::lock_guard<std::mutex> lk(cancelMutex);
+        stopSources[idStr].push_back(src);
+        auto it = cancelMap.find(idStr);
+        if (it != cancelMap.end() && it->second && it->second->cancelled.load()) {
+            try { src->request_stop(); } catch (...) {}
+        }
+        return src;
+    }
+    void unregisterStopSource(const std::string& idStr, const std::shared_ptr<std::stop_source>& src) {
+        std::lock_guard<std::mutex> lk(cancelMutex);
+        auto it = stopSources.find(idStr);
+        if (it == stopSources.end()) return;
+        auto& vec = it->second;
+        vec.erase(std::remove_if(vec.begin(), vec.end(), [&](const std::shared_ptr<std::stop_source>& p){ return p.get() == src.get(); }), vec.end());
+        if (vec.empty()) stopSources.erase(it);
+    }
 
     explicit Impl(const Implementation& info)
         : clientInfo(info) {
@@ -207,6 +288,14 @@ void Client::Impl::onNotification(std::unique_ptr<JSONRPCNotification> n) {
                 const auto& o = std::get<JSONValue::Object>(n->params->value);
                 this->handleProgressNotification(o);
             }
+        } else if (n->method == Methods::Cancelled) {
+            // Server-initiated cancellation for a pending request id
+            if (n->params.has_value()) {
+                std::string idStr = parseIdFromParams(n->params.value());
+                if (!idStr.empty()) {
+                    this->cancelById(idStr);
+                }
+            }
         } else {
             this->invalidateCachesForListChanged(n->method);
             auto it = this->notificationHandlers.find(n->method);
@@ -256,7 +345,13 @@ void Client::Impl::logInvalidCreateMessageResultContext(const JSONValue& result)
 std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& req) {
     try {
         if (req.method == Methods::CreateMessage) {
-            if (!this->samplingHandler) {
+            // Register cancellation and stop_source for this request id
+            const std::string idStr = Impl::idToString(req.id);
+            auto token = this->registerCancelToken(idStr);
+            struct ScopeGuard { std::function<void()> f; ~ScopeGuard(){ if (f) f(); } } guard{ [this, idStr](){ this->unregisterCancelToken(idStr); } };
+            auto src = this->registerStopSource(idStr);
+
+            if (!this->samplingHandler && !this->samplingHandlerCancelable) {
                 errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No sampling handler registered";
                 return errors::makeErrorResponse(req.id, e);
             }
@@ -276,8 +371,15 @@ std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& r
                     return errors::makeErrorResponse(req.id, e);
                 }
             }
-            auto fut = this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext);
+            std::future<JSONValue> fut = this->samplingHandler
+                ? this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext)
+                : this->samplingHandlerCancelable(messages, modelPreferences, systemPrompt, includeContext, src->get_token());
             JSONValue result = fut.get();
+            // If cancelled while or after handler ran, return Cancelled
+            if (token && token->cancelled.load()) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Cancelled";
+                return errors::makeErrorResponse(req.id, e);
+            }
             if (this->validationMode == validation::ValidationMode::Strict) {
                 if (!validation::validateCreateMessageResultJson(result)) {
                     this->logInvalidCreateMessageResultContext(result);
@@ -1035,7 +1137,7 @@ mcp::async::Task<JSONValue> Client::Impl::coGetPrompt(const std::string& name, c
 
 
 Client::Client(const Implementation& clientInfo)
-    : pImpl(std::make_unique<Impl>(clientInfo)) {
+    : pImpl(std::unique_ptr<Impl>(new Impl(clientInfo))) {
     FUNC_SCOPE();
 }
 
@@ -1174,6 +1276,11 @@ void Client::SetProgressHandler(ProgressHandler handler) {
 void Client::SetSamplingHandler(SamplingHandler handler) {
     FUNC_SCOPE();
     pImpl->samplingHandler = std::move(handler);
+}
+
+void Client::SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) {
+    FUNC_SCOPE();
+    pImpl->samplingHandlerCancelable = std::move(handler);
 }
 
 void Client::SetErrorHandler(ErrorHandler handler) {

@@ -182,6 +182,21 @@ Tests:
   - Register a server-side handler for `sampling/createMessage`.
 - std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params)
   - Request the client to create a message (server-initiated sampling path).
+ - std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId)
+  - Same as above, but allows the server to specify the JSON-RPC request id. This is useful for end-to-end cancellation tests or workflows where the server needs to target a specific in-flight request with a `notifications/cancelled` message.
+
+Cancellation (server-initiated):
+
+- The server can request cancellation of an in-flight client request by sending:
+
+```cpp
+JSONValue::Object cancelParams; cancelParams["id"] = std::make_shared<JSONValue>(std::string("<request-id>"));
+server.SendNotification(Methods::Cancelled, JSONValue{cancelParams}).get();
+```
+
+- When the client observes this notification, it will propagate `std::stop_token` to a cancelable sampling handler (if registered) and ultimately respond with an error shaped as `{ code: -32603, message: "Cancelled" }`.
+
+Tests: see `tests/test_sampling_cancellation_e2e.cpp`.
 
  ## Keepalive / Heartbeat
  - void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs)

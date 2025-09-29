@@ -76,6 +76,14 @@ This page summarizes the public client APIs with signatures and brief descriptio
     const JSONValue& includeContext)>
 - void SetSamplingHandler(SamplingHandler handler)
   - Register a handler for server-initiated sampling/createMessage.
+ - using SamplingHandlerCancelable = std::function<std::future<JSONValue>(
+    const JSONValue& messages,
+    const JSONValue& modelPreferences,
+    const JSONValue& systemPrompt,
+    const JSONValue& includeContext,
+    std::stop_token st)>
+ - void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler)
+  - Register a cancelable variant that receives a `std::stop_token`. When set, the client uses this handler for `sampling/createMessage` and will request stop when it receives `notifications/cancelled` targeting the in-flight request id.
 
 ## Notifications, progress, and errors
 - using NotificationHandler = std::function<void(const std::string& method, const JSONValue& params)>;
