@@ -60,7 +60,9 @@ public:
             while (connected && !st.stop_requested()) {
                 std::unique_lock<std::mutex> lock(queueMutex);
                 queueCondition.wait(lock, [this, &st]() { return !messageQueue.empty() || !connected || st.stop_requested(); });
-                if (st.stop_requested()) break;
+                if (st.stop_requested()) {
+                    break;
+                }
                 while (!messageQueue.empty() && connected) {
                     std::string message = messageQueue.front();
                     messageQueue.pop();
@@ -77,8 +79,8 @@ public:
         // Helper: detect if a given top-level key exists (e.g., id at root, not inside params)
         auto hasTopLevelKey = [](const std::string& s, const std::string& key) -> bool {
             std::size_t i = 0; auto isWs = [](char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
-            while (i < s.size() && isWs(s[i])) ++i;
-            if (i >= s.size() || s[i] != '{') return false;
+            while (i < s.size() && isWs(s[i])) { ++i; }
+            if (i >= s.size() || s[i] != '{') { return false; }
             ++i; int depth = 1; bool inStr = false; bool esc = false;
             while (i < s.size()) {
                 char c = s[i++];
@@ -95,18 +97,18 @@ public:
                         char d = s[i++];
                         if (e2) { e2 = false; continue; }
                         if (d == '\\') { e2 = true; continue; }
-                        if (d == '"') break; 
+                        if (d == '"') { break; }
                         keyStr.push_back(d);
                     }
-                    while (i < s.size() && isWs(s[i])) ++i;
+                    while (i < s.size() && isWs(s[i])) { ++i; }
                     if (i < s.size() && s[i] == ':') {
                         ++i;
-                        if (depth == 1 && keyStr == key) return true;
+                        if (depth == 1 && keyStr == key) { return true; }
                     }
                     continue;
                 }
                 if (c == '{') { ++depth; continue; }
-                if (c == '}') { --depth; if (depth == 0) break; continue; }
+                if (c == '}') { --depth; if (depth == 0) { break; } continue; }
                 // ignore other characters, including arrays
             }
             return false;
@@ -291,17 +293,26 @@ std::future<void> InMemoryTransport::SendNotification(
     std::string serialized = notification->Serialize();
     LOG_DEBUG("Sending in-memory notification: {}", serialized);
     if (!pImpl->sendToPeer(serialized)) {
-        if (pImpl->errorHandler) pImpl->errorHandler("Peer not connected");
+        if (pImpl->errorHandler) {
+            pImpl->errorHandler("Peer not connected");
+        }
     }
     std::promise<void> promise; promise.set_value(); return promise.get_future();
 }
 
-void InMemoryTransport::SetNotificationHandler(NotificationHandler handler) { FUNC_SCOPE(); pImpl->notificationHandler = std::move(handler); }
-void InMemoryTransport::SetRequestHandler(RequestHandler handler) { FUNC_SCOPE(); pImpl->requestHandler = std::move(handler); }
-void InMemoryTransport::SetErrorHandler(ErrorHandler handler) { FUNC_SCOPE(); pImpl->errorHandler = std::move(handler); }
+void InMemoryTransport::SetNotificationHandler(NotificationHandler handler) {
+    FUNC_SCOPE();
+    pImpl->notificationHandler = std::move(handler);
+}
 
-std::unique_ptr<ITransport> InMemoryTransportFactory::CreateTransport(const std::string& /*config*/) {
-    return std::make_unique<InMemoryTransport>();
+void InMemoryTransport::SetErrorHandler(ErrorHandler handler) {
+    FUNC_SCOPE();
+    pImpl->errorHandler = std::move(handler);
+}
+
+void InMemoryTransport::SetRequestHandler(RequestHandler handler) {
+    FUNC_SCOPE();
+    pImpl->requestHandler = std::move(handler);
 }
 
 } // namespace mcp

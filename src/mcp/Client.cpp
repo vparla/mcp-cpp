@@ -72,24 +72,33 @@ private:
             const auto& o = std::get<JSONValue::Object>(params.value);
             auto it = o.find("id");
             if (it != o.end() && it->second) {
-                if (std::holds_alternative<std::string>(it->second->value)) idStr = std::get<std::string>(it->second->value);
-                else if (std::holds_alternative<int64_t>(it->second->value)) idStr = std::to_string(std::get<int64_t>(it->second->value));
+                if (std::holds_alternative<std::string>(it->second->value)) {
+                    idStr = std::get<std::string>(it->second->value);
+                } else if (std::holds_alternative<int64_t>(it->second->value)) {
+                    idStr = std::to_string(std::get<int64_t>(it->second->value));
+                }
             }
         }
         return idStr;
     }
 
     std::shared_ptr<CancellationToken> registerCancelToken(const std::string& idStr) {
-        if (idStr.empty()) return std::make_shared<CancellationToken>();
+        if (idStr.empty()) {
+            return std::make_shared<CancellationToken>();
+        }
         std::lock_guard<std::mutex> lk(cancelMutex);
         auto it = cancelMap.find(idStr);
-        if (it != cancelMap.end()) return it->second;
+        if (it != cancelMap.end()) {
+            return it->second;
+        }
         auto tok = std::make_shared<CancellationToken>();
         cancelMap[idStr] = tok;
         return tok;
     }
     void unregisterCancelToken(const std::string& idStr) {
-        if (idStr.empty()) return;
+        if (idStr.empty()) {
+            return;
+        }
         std::lock_guard<std::mutex> lk(cancelMutex);
         cancelMap.erase(idStr);
         stopSources.erase(idStr);
@@ -106,7 +115,14 @@ private:
         }
         auto itS = stopSources.find(idStr);
         if (itS != stopSources.end()) {
-            for (auto& src : itS->second) { if (src) { try { src->request_stop(); } catch (...) {} } }
+            for (auto& src : itS->second) {
+                if (src) {
+                    try {
+                        src->request_stop();
+                    } catch (...) {
+                    }
+                }
+            }
         }
     }
     std::shared_ptr<std::stop_source> registerStopSource(const std::string& idStr) {
@@ -115,17 +131,23 @@ private:
         stopSources[idStr].push_back(src);
         auto it = cancelMap.find(idStr);
         if (it != cancelMap.end() && it->second && it->second->cancelled.load()) {
-            try { src->request_stop(); } catch (...) {}
+            try {
+                src->request_stop();
+            } catch (...) {}
         }
         return src;
     }
     void unregisterStopSource(const std::string& idStr, const std::shared_ptr<std::stop_source>& src) {
         std::lock_guard<std::mutex> lk(cancelMutex);
         auto it = stopSources.find(idStr);
-        if (it == stopSources.end()) return;
+        if (it == stopSources.end()) {
+            return;
+        }
         auto& vec = it->second;
         vec.erase(std::remove_if(vec.begin(), vec.end(), [&](const std::shared_ptr<std::stop_source>& p){ return p.get() == src.get(); }), vec.end());
-        if (vec.empty()) stopSources.erase(it);
+        if (vec.empty()) {
+            stopSources.erase(it);
+        }
     }
 
     explicit Impl(const Implementation& info)
@@ -409,7 +431,9 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
         this->onNotification(std::move(n));
     });
     this->transport->SetErrorHandler([this](const std::string& err) {
-        if (this->errorHandler) this->errorHandler(err);
+        if (this->errorHandler) {
+            this->errorHandler(err);
+        }
     });
     this->transport->SetRequestHandler([this](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
         return this->onRequest(req);
@@ -425,7 +449,9 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
 }
 mcp::async::Task<void> Client::Impl::coDisconnect() {
     FUNC_SCOPE();
-    if (!this->transport) co_return;
+    if (!this->transport) {
+        co_return;
+    }
     auto fut = this->transport->Close();
     try {
         (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
@@ -477,8 +503,12 @@ mcp::async::Task<JSONValue> Client::Impl::coCallTool(const std::string& name, co
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response) {
-            if (response->result.has_value()) co_return response->result.value();
-            if (response->error.has_value()) co_return response->error.value();
+            if (response->result.has_value()) {
+                co_return response->result.value();
+            }
+            if (response->error.has_value()) {
+                co_return response->error.value();
+            }
         }
     } catch (const std::exception& e) {
         LOG_ERROR("CallTool exception: {}", e.what());
@@ -600,9 +630,15 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListTools;
     JSONValue::Object params;
-    if (cursor.has_value()) params["cursor"] = std::make_shared<JSONValue>(cursor.value());
-    if (limit.has_value() && *limit > 0) params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
-    if (!params.empty()) request->params = JSONValue{params};
+    if (cursor.has_value()) {
+        params["cursor"] = std::make_shared<JSONValue>(cursor.value());
+    }
+    if (limit.has_value() && *limit > 0) {
+        params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
+    }
+    if (!params.empty()) {
+        request->params = JSONValue{params};
+    }
     auto fut = this->transport->SendRequest(std::move(request));
     ToolsListResult out;
     try {
@@ -635,15 +671,23 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
                 if (toolsIt != obj.end() && std::holds_alternative<JSONValue::Array>(toolsIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(toolsIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Tool tool;
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) tool.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            tool.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) tool.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            tool.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto schemaIt = item.find("inputSchema");
-                        if (schemaIt != item.end()) tool.inputSchema = *schemaIt->second;
+                        if (schemaIt != item.end()) {
+                            tool.inputSchema = *schemaIt->second;
+                        }
                         out.tools.push_back(std::move(tool));
                     }
                 }

@@ -117,9 +117,15 @@ private:
         std::string idStr;
         std::visit([&](const auto& v){
             using T = std::decay_t<decltype(v)>;
-            if constexpr (std::is_same_v<T, std::string>) { idStr = v;     }
-            else if constexpr (std::is_same_v<T, int64_t>) { idStr = std::to_string(v); }
-            else { idStr = ""; }
+            if constexpr (std::is_same_v<T, std::string>) { 
+                idStr = v;
+            }
+            else if constexpr (std::is_same_v<T, int64_t>) {
+                idStr = std::to_string(v);
+            }
+            else { 
+                idStr = "";
+            }
         }, id);
         return idStr;
     }
@@ -171,8 +177,12 @@ private:
         JSONValue::Object ro;
         ro["uri"] = std::make_shared<JSONValue>(r.uri);
         ro["name"] = std::make_shared<JSONValue>(r.name);
-        if (r.description.has_value()) ro["description"] = std::make_shared<JSONValue>(r.description.value());
-        if (r.mimeType.has_value()) ro["mimeType"] = std::make_shared<JSONValue>(r.mimeType.value());
+        if (r.description.has_value()) {
+            ro["description"] = std::make_shared<JSONValue>(r.description.value());
+        }
+        if (r.mimeType.has_value()) {
+            ro["mimeType"] = std::make_shared<JSONValue>(r.mimeType.value());
+        }
         return ro;
     }
 
@@ -180,8 +190,12 @@ private:
         JSONValue::Object rto;
         rto["uriTemplate"] = std::make_shared<JSONValue>(rt.uriTemplate);
         rto["name"] = std::make_shared<JSONValue>(rt.name);
-        if (rt.description.has_value()) rto["description"] = std::make_shared<JSONValue>(rt.description.value());
-        if (rt.mimeType.has_value()) rto["mimeType"] = std::make_shared<JSONValue>(rt.mimeType.value());
+        if (rt.description.has_value()) {
+            rto["description"] = std::make_shared<JSONValue>(rt.description.value());
+        }
+        if (rt.mimeType.has_value()) {
+            rto["mimeType"] = std::make_shared<JSONValue>(rt.mimeType.value());
+        }
         return rto;
     }
 
@@ -239,14 +253,18 @@ private:
     LOG_DEBUG("Handling tools/list request");
     size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
     std::vector<Tool> tools;
-    {
+    { //scope guard
         std::lock_guard<std::mutex> lock(this->registryMutex);
         tools.reserve(this->toolMetadata.size());
-        for (const auto& [name, meta] : this->toolMetadata) tools.push_back(meta);
+        for (const auto& [name, meta] : this->toolMetadata) {
+            tools.push_back(meta);
+        }
     }
     std::sort(tools.begin(), tools.end(), [](const Tool& a, const Tool& b){ return a.name < b.name; });
     const size_t total = tools.size();
-    if (start > total) start = total;
+    if (start > total) {
+        start = total;
+    }
     const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
 
     JSONValue::Object resultObj;
@@ -274,14 +292,18 @@ private:
     LOG_DEBUG("Handling resources/list request");
     size_t start = 0; std::optional<size_t> limitOpt; parsePagingParams(req, start, limitOpt);
     std::vector<Resource> resources;
-    {
+    { //scope guard
         std::lock_guard<std::mutex> lock(this->registryMutex);
         resources.reserve(this->resourceUris.size());
-        for (const auto& uri : this->resourceUris) resources.emplace_back(uri, std::string("Resource: ") + uri);
+        for (const auto& uri : this->resourceUris) {
+            resources.emplace_back(uri, std::string("Resource: ") + uri);
+        }
     }
     std::sort(resources.begin(), resources.end(), [](const Resource& a, const Resource& b){ return a.uri < b.uri; });
     const size_t total = resources.size();
-    if (start > total) start = total;
+    if (start > total) {
+        start = total;
+    }
     const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
 
     JSONValue::Object resultObj;
@@ -315,7 +337,9 @@ private:
     }
     std::sort(templatesCopy.begin(), templatesCopy.end(), [](const ResourceTemplate& a, const ResourceTemplate& b){ return a.uriTemplate < b.uriTemplate; });
     const size_t total = templatesCopy.size();
-    if (start > total) start = total;
+    if (start > total) {
+        start = total;
+    }
     const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
 
     JSONValue::Object resultObj;
@@ -346,11 +370,15 @@ private:
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
         names.reserve(this->promptHandlers.size());
-        for (const auto& kv : this->promptHandlers) names.push_back(kv.first);
+        for (const auto& kv : this->promptHandlers) {
+            names.push_back(kv.first);
+        }
     }
     std::sort(names.begin(), names.end());
     const size_t total = names.size();
-    if (start > total) start = total;
+    if (start > total) {
+        start = total;
+    }
     const size_t end = limitOpt.has_value() ? std::min(total, start + limitOpt.value()) : total;
 
     JSONValue::Object resultObj;
@@ -379,17 +407,31 @@ private:
     std::string name; JSONValue arguments;
     if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
         const auto& o = std::get<JSONValue::Object>(req.params->value);
-        auto it = o.find("name"); if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) name = std::get<std::string>(it->second->value);
-        auto ia = o.find("arguments"); if (ia != o.end() && ia->second) arguments = *(ia->second);
+        auto it = o.find("name");
+        if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
+            name = std::get<std::string>(it->second->value);
+        }
+        auto ia = o.find("arguments");
+        if (ia != o.end() && ia->second) {
+            arguments = *(ia->second);
+        }
     }
-    if (name.empty()) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; return errors::makeErrorResponse(req.id, e); }
+    if (name.empty()) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; 
+        return errors::makeErrorResponse(req.id, e);
+    }
     ToolHandler handler;
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
         auto it = this->toolHandlers.find(name);
-        if (it != this->toolHandlers.end()) handler = it->second;
+        if (it != this->toolHandlers.end()) {
+            handler = it->second;
+        }
     }
-    if (!handler) { errors::McpError e; e.code = JSONRPCErrorCodes::ToolNotFound; e.message = "Tool not found"; return errors::makeErrorResponse(req.id, e); }
+    if (!handler) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::ToolNotFound; e.message = "Tool not found";
+        return errors::makeErrorResponse(req.id, e);
+    }
 
     const std::string idStr = Impl::idToString(req.id);
     StopSourceGuard guard{this, idStr};
@@ -409,7 +451,9 @@ private:
     }
     JSONValue::Object obj;
     JSONValue::Array content;
-    for (auto& v : tr.content) content.push_back(std::make_shared<JSONValue>(std::move(v)));
+    for (auto& v : tr.content) {
+        content.push_back(std::make_shared<JSONValue>(std::move(v)));
+    }
     obj["content"] = std::make_shared<JSONValue>(content);
     obj["isError"] = std::make_shared<JSONValue>(tr.isError);
     JSONValue result{obj};
@@ -428,20 +472,43 @@ private:
     std::optional<int64_t> offsetOpt; std::optional<int64_t> lengthOpt;
     if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
         const auto& o = std::get<JSONValue::Object>(req.params->value);
-        auto it = o.find("uri"); if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) uri = std::get<std::string>(it->second->value);
-        auto io = o.find("offset"); if (io != o.end() && std::holds_alternative<int64_t>(io->second->value)) offsetOpt = std::get<int64_t>(io->second->value);
-        auto il = o.find("length"); if (il != o.end() && std::holds_alternative<int64_t>(il->second->value)) lengthOpt = std::get<int64_t>(il->second->value);
+        auto it = o.find("uri");
+        if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
+            uri = std::get<std::string>(it->second->value);
+        }
+        auto io = o.find("offset");
+        if (io != o.end() && std::holds_alternative<int64_t>(io->second->value)) {
+            offsetOpt = std::get<int64_t>(io->second->value);
+        }
+        auto il = o.find("length");
+        if (il != o.end() && std::holds_alternative<int64_t>(il->second->value)) {
+            lengthOpt = std::get<int64_t>(il->second->value);
+        }
     }
-    if (uri.empty()) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params"; return errors::makeErrorResponse(req.id, e); }
-    if (offsetOpt.has_value() && offsetOpt.value() < 0) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length"; return errors::makeErrorResponse(req.id, e); }
-    if (lengthOpt.has_value() && lengthOpt.value() <= 0) { errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length"; return errors::makeErrorResponse(req.id, e); }
+    if (uri.empty()) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    if (offsetOpt.has_value() && offsetOpt.value() < 0) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    if (lengthOpt.has_value() && lengthOpt.value() <= 0) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length";
+        return errors::makeErrorResponse(req.id, e);
+    }
     ResourceHandler handler;
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
         auto it = this->resourceHandlers.find(uri);
-        if (it != this->resourceHandlers.end()) handler = it->second;
+        if (it != this->resourceHandlers.end()) {
+            handler = it->second;
+        }
     }
-    if (!handler) { errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found"; return errors::makeErrorResponse(req.id, e); }
+    if (!handler) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found";
+        return errors::makeErrorResponse(req.id, e);
+    }
 
     const std::string idStr = Impl::idToString(req.id);
     StopSourceGuard guard{this, idStr};
@@ -470,12 +537,24 @@ private:
         std::string flat;
         flat.reserve(1024);
         for (const auto& v : rr.contents) {
-            if (!std::holds_alternative<JSONValue::Object>(v.value)) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
+                return errors::makeErrorResponse(req.id, e);
+            }
             const auto& o = std::get<JSONValue::Object>(v.value);
             auto itType = o.find("type"); auto itText = o.find("text");
-            if (itType == o.end() || itText == o.end() || !itType->second || !itText->second) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
-            if (!std::holds_alternative<std::string>(itType->second->value) || std::get<std::string>(itType->second->value) != std::string("text")) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
-            if (!std::holds_alternative<std::string>(itText->second->value)) { errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content"; return errors::makeErrorResponse(req.id, e); }
+            if (itType == o.end() || itText == o.end() || !itType->second || !itText->second) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            if (!std::holds_alternative<std::string>(itType->second->value) || std::get<std::string>(itType->second->value) != std::string("text")) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            if (!std::holds_alternative<std::string>(itText->second->value)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
+                return errors::makeErrorResponse(req.id, e);
+            }
             flat += std::get<std::string>(itText->second->value);
         }
         size_t start = static_cast<size_t>(offsetOpt.value_or(0));
@@ -484,7 +563,9 @@ private:
         } else {
             size_t maxLen = flat.size() - start;
             size_t take = lengthOpt.has_value() ? static_cast<size_t>(lengthOpt.value()) : maxLen;
-            if (take > maxLen) { take = maxLen; }
+            if (take > maxLen) {
+                take = maxLen;
+            }
             // Enforce hard clamp if advertised via capabilities.experimental.resourceReadChunking.maxChunkBytes
             size_t clampBytes = 0;
             auto itExp = capabilities.experimental.find("resourceReadChunking");
@@ -493,10 +574,14 @@ private:
                 auto itMax = expObj.find("maxChunkBytes");
                 if (itMax != expObj.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
                     int64_t v = std::get<int64_t>(itMax->second->value);
-                    if (v > 0) clampBytes = static_cast<size_t>(v);
+                    if (v > 0) {
+                        clampBytes = static_cast<size_t>(v);
+                    }
                 }
             }
-            if (clampBytes > 0 && take > clampBytes) { take = clampBytes; }
+            if (clampBytes > 0 && take > clampBytes) {
+                take = clampBytes;
+            }
             std::string slice = flat.substr(start, take);
             JSONValue::Object t; t["type"] = std::make_shared<JSONValue>(std::string("text")); t["text"] = std::make_shared<JSONValue>(slice);
             contents.push_back(std::make_shared<JSONValue>(JSONValue{t}));
@@ -513,17 +598,23 @@ private:
     auto resp = std::make_unique<JSONRPCResponse>(); resp->id = req.id; resp->result = result; return resp;
 }
     std::shared_ptr<CancellationToken> registerCancelToken(const std::string& idStr) {
-        if (idStr.empty()) return std::make_shared<CancellationToken>();
+        if (idStr.empty()) {
+            return std::make_shared<CancellationToken>();
+        }
         std::lock_guard<std::mutex> lk(cancelMutex);
         auto it = cancelMap.find(idStr);
-        if (it != cancelMap.end()) return it->second;
+        if (it != cancelMap.end()) {
+            return it->second;
+        }
         auto tok = std::make_shared<CancellationToken>();
         cancelMap[idStr] = tok;
         return tok;
     }
 
     void unregisterCancelToken(const std::string& idStr) {
-        if (idStr.empty()) return;
+        if (idStr.empty()) {
+            return;
+        }
         std::lock_guard<std::mutex> lk(cancelMutex);
         cancelMap.erase(idStr);
         // Also clear any stale stop sources for this id
@@ -546,7 +637,9 @@ private:
         if (itS != stopSources.end()) {
             for (auto& src : itS->second) {
                 if (src) {
-                    try { src->request_stop(); } catch (...) {}
+                    try {
+                        src->request_stop();
+                    } catch (...) {}
                 }
             }
         }
@@ -561,7 +654,10 @@ private:
         // immediately request stop so cooperative handlers observe cancellation.
         auto it = cancelMap.find(idStr);
         if (it != cancelMap.end() && it->second && it->second->cancelled.load()) {
-            try { src->request_stop(); } catch (...) {}
+            try {
+                src->request_stop();
+            } catch (...) {
+            }
         }
         return src;
     }
@@ -569,10 +665,14 @@ private:
     void unregisterStopSource(const std::string& idStr, const std::shared_ptr<std::stop_source>& src) {
         std::lock_guard<std::mutex> lk(cancelMutex);
         auto it = stopSources.find(idStr);
-        if (it == stopSources.end()) return;
+        if (it == stopSources.end()) {
+            return;
+        }
         auto& vec = it->second;
         vec.erase(std::remove_if(vec.begin(), vec.end(), [&](const std::shared_ptr<std::stop_source>& p){ return p.get() == src.get(); }), vec.end());
-        if (vec.empty()) stopSources.erase(it);
+        if (vec.empty()) {
+            stopSources.erase(it);
+        }
     }
 
     // Registry maps
@@ -776,9 +876,15 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
     this->transport = std::move(transport);
     // Wire transport handlers for server-side processing
     this->transport->SetNotificationHandler([this](std::unique_ptr<JSONRPCNotification> n){
-        if (!n) return;
-        try { this->handleNotification(std::move(n)); }
-        catch (const std::exception& e) { LOG_ERROR("Server notification handler exception: {}", e.what()); }
+        if (!n) {
+            return;
+        }
+        try { 
+            this->handleNotification(std::move(n)); 
+        }
+        catch (const std::exception& e) { 
+            LOG_ERROR("Server notification handler exception: {}", e.what());
+        }
     });
 
     this->transport->SetErrorHandler([this](const std::string& err){
@@ -788,8 +894,12 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
             this->keepaliveSendFailed.store(true);
         }
         if (this->errorCallback) {
-            try { this->errorCallback(err); }
-            catch (const std::exception& e) { LOG_ERROR("Server error callback exception: {}", e.what()); }
+            try { 
+                this->errorCallback(err);
+             }
+            catch (const std::exception& e) { 
+                LOG_ERROR("Server error callback exception: {}", e.what()); 
+            }
         }
     });
 
@@ -798,8 +908,12 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
     });
 
     auto fut = this->transport->Start();
-    try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); }
-    catch (const std::exception& e) { LOG_ERROR("Server start exception: {}", e.what()); }
+    try {
+        (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+    }
+    catch (const std::exception& e) {
+        LOG_ERROR("Server start exception: {}", e.what());
+    }
     co_return;
 }
 
@@ -855,7 +969,11 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
             }
             return r;
         }
-        { errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; return errors::makeErrorResponse(req.id, e); }
+        // Method not found
+        { //scope guard
+            errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotFound; e.message = "Method not found"; 
+            return errors::makeErrorResponse(req.id, e); 
+        }
     } catch (const std::exception& e) {
         errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
         return errors::makeErrorResponse(req.id, err);
@@ -902,7 +1020,10 @@ void Server::Impl::parsePagingParams(const JSONRPCRequest& request, size_t& star
         auto it = o.find("cursor");
         if (it != o.end()) {
             if (std::holds_alternative<std::string>(it->second->value)) {
-                try { start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value))); } catch (...) {}
+                try {
+                    start = static_cast<size_t>(std::stoll(std::get<std::string>(it->second->value)));
+                } catch (...) {
+                }
             } else if (std::holds_alternative<int64_t>(it->second->value)) {
                 start = static_cast<size_t>(std::get<int64_t>(it->second->value));
             }
@@ -910,7 +1031,9 @@ void Server::Impl::parsePagingParams(const JSONRPCRequest& request, size_t& star
         it = o.find("limit");
         if (it != o.end() && std::holds_alternative<int64_t>(it->second->value)) {
             auto lim = std::get<int64_t>(it->second->value);
-            if (lim > 0) limitOpt = static_cast<size_t>(lim);
+            if (lim > 0) {
+                limitOpt = static_cast<size_t>(lim);
+            }
         }
     }
 }
@@ -1044,7 +1167,10 @@ mcp::async::Task<void> Server::Impl::coStop() {
     LOG_INFO("Stopping MCP server");
     if (this->keepaliveThread.joinable()) {
         this->keepaliveStop.store(true);
-        try { this->keepaliveThread.join(); } catch (...) {}
+        try {
+            this->keepaliveThread.join();
+        } catch (...) {
+        }
     }
     if (this->transport) {
         this->initialized = false;
@@ -1069,7 +1195,9 @@ mcp::async::Task<JSONValue> Server::Impl::coCallTool(const std::string& name, co
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
         auto it = this->toolHandlers.find(name);
-        if (it != this->toolHandlers.end()) handlerCopy = it->second;
+        if (it != this->toolHandlers.end()) {
+            handlerCopy = it->second;
+        }
     }
     if (handlerCopy) {
         std::stop_source src;
@@ -1077,7 +1205,9 @@ mcp::async::Task<JSONValue> Server::Impl::coCallTool(const std::string& name, co
         ToolResult result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         JSONValue::Object resultObj;
         JSONValue::Array contentArray;
-        for (auto& v : result.content) contentArray.push_back(std::make_shared<JSONValue>(std::move(v)));
+        for (auto& v : result.content) {
+            contentArray.push_back(std::make_shared<JSONValue>(std::move(v)));
+        }
         resultObj["content"] = std::make_shared<JSONValue>(contentArray);
         resultObj["isError"] = std::make_shared<JSONValue>(result.isError);
         co_return JSONValue{resultObj};
@@ -1091,7 +1221,9 @@ mcp::async::Task<JSONValue> Server::Impl::coReadResource(const std::string& uri)
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
         auto it = this->resourceHandlers.find(uri);
-        if (it != this->resourceHandlers.end()) handlerCopy = it->second;
+        if (it != this->resourceHandlers.end()) {
+            handlerCopy = it->second;
+        }
     }
     if (handlerCopy) {
         std::stop_source src;
@@ -1099,7 +1231,9 @@ mcp::async::Task<JSONValue> Server::Impl::coReadResource(const std::string& uri)
         ResourceContent result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         JSONValue::Object resultObj;
         JSONValue::Array contentsArray;
-        for (auto& v : result.contents) contentsArray.push_back(std::make_shared<JSONValue>(std::move(v)));
+        for (auto& v : result.contents) {
+            contentsArray.push_back(std::make_shared<JSONValue>(std::move(v)));
+        }
         resultObj["contents"] = std::make_shared<JSONValue>(contentsArray);
         co_return JSONValue{resultObj};
     }
@@ -1138,21 +1272,30 @@ mcp::async::Task<void> Server::Impl::coSendNotification(const std::string& metho
 mcp::async::Task<void> Server::Impl::coNotifyResourcesListChanged() {
     FUNC_SCOPE();
     auto fut = this->coSendNotification(Methods::ResourceListChanged, JSONValue{JSONValue::Object{}}).toFuture();
-    try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+    try {
+        (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+    } catch (...) {
+    }
     co_return;
 }
 
 mcp::async::Task<void> Server::Impl::coNotifyToolsListChanged() {
     FUNC_SCOPE();
     auto fut = this->coSendNotification(Methods::ToolListChanged, JSONValue{JSONValue::Object{}}).toFuture();
-    try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+    try {
+        (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+    } catch (...) {
+    }
     co_return;
 }
 
 mcp::async::Task<void> Server::Impl::coNotifyPromptsListChanged() {
     FUNC_SCOPE();
     auto fut = this->coSendNotification(Methods::PromptListChanged, JSONValue{JSONValue::Object{}}).toFuture();
-    try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+    try {
+        (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+    } catch (...) {
+    }
     co_return;
 }
 
@@ -1165,12 +1308,17 @@ mcp::async::Task<void> Server::Impl::coNotifyResourceUpdated(const std::string& 
             shouldSend = false;
         }
     }
-    if (!shouldSend) co_return;
+    if (!shouldSend) {
+        co_return;
+    }
     JSONValue::Object paramsObj;
     paramsObj["uri"] = std::make_shared<JSONValue>(uri);
     {
         auto fut = this->coSendNotification("notifications/resources/updated", JSONValue{paramsObj}).toFuture();
-        try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+        try {
+            (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        } catch (...) {
+        }
     }
     co_return;
 }
@@ -1183,7 +1331,10 @@ mcp::async::Task<void> Server::Impl::coSendProgress(const std::string& token, do
     paramsObj["message"] = std::make_shared<JSONValue>(message);
     {
         auto fut = this->coSendNotification(Methods::Progress, JSONValue{paramsObj}).toFuture();
-        try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+        try {
+            (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        } catch (...) {
+        }
     }
     co_return;
 }
@@ -1218,7 +1369,10 @@ mcp::async::Task<void> Server::Impl::coLogToClient(const std::string& level, con
     }
     {
         auto fut = this->coSendNotification(Methods::Log, JSONValue{obj}).toFuture();
-        try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (...) {}
+        try {
+            (void) co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        } catch (...) {
+        }
     }
     co_return;
 }
@@ -1235,7 +1389,9 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessage(const CreateMes
     // messages (array)
     JSONValue::Array msgs;
     msgs.reserve(params.messages.size());
-    for (const auto& m : params.messages) msgs.push_back(std::make_shared<JSONValue>(m));
+    for (const auto& m : params.messages) {
+        msgs.push_back(std::make_shared<JSONValue>(m));
+    }
     obj["messages"] = std::make_shared<JSONValue>(msgs);
     // Optional fields
     if (params.modelPreferences.has_value()) {
@@ -1269,8 +1425,12 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessage(const CreateMes
     try {
         auto resp = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (resp) {
-            if (resp->result.has_value()) co_return resp->result.value();
-            if (resp->error.has_value()) co_return resp->error.value();
+            if (resp->result.has_value()) {
+                co_return resp->result.value();
+            }
+            if (resp->error.has_value()) {
+                co_return resp->error.value();
+            }
         }
     } catch (const std::exception& e) {
         LOG_ERROR("RequestCreateMessage exception: {}", e.what());
@@ -1291,7 +1451,9 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessageWithId(const Cre
     // messages (array)
     JSONValue::Array msgs;
     msgs.reserve(params.messages.size());
-    for (const auto& m : params.messages) msgs.push_back(std::make_shared<JSONValue>(m));
+    for (const auto& m : params.messages) {
+        msgs.push_back(std::make_shared<JSONValue>(m));
+    }
     obj["messages"] = std::make_shared<JSONValue>(msgs);
     // Optional fields
     if (params.modelPreferences.has_value()) {
@@ -1325,8 +1487,12 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessageWithId(const Cre
     try {
         auto resp = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (resp) {
-            if (resp->result.has_value()) co_return resp->result.value();
-            if (resp->error.has_value()) co_return resp->error.value();
+            if (resp->result.has_value()) {
+                co_return resp->result.value();
+            }
+            if (resp->error.has_value()) {
+                co_return resp->error.value();
+            }
         }
     } catch (const std::exception& e) {
         LOG_ERROR("RequestCreateMessageWithId exception: {}", e.what());
@@ -1345,7 +1511,10 @@ Server::~Server() {
     // Ensure keepalive thread is stopped
     if (pImpl && pImpl->keepaliveThread.joinable()) {
         pImpl->keepaliveStop.store(true);
-        try { pImpl->keepaliveThread.join(); } catch (...) {}
+        try {
+            pImpl->keepaliveThread.join();
+        } catch (...) {
+        }
     }
 }
 
@@ -1378,104 +1547,111 @@ std::future<void> Server::HandleInitialize(
 void Server::RegisterTool(const std::string& name, ToolHandler handler) {
     FUNC_SCOPE();
     LOG_DEBUG("Registering tool: {}", name);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->toolHandlers[name] = std::move(handler);
-    // Default metadata if not already provided via overload
-    if (pImpl->toolMetadata.find(name) == pImpl->toolMetadata.end()) {
-        JSONValue::Object emptySchema;
-        emptySchema["type"] = std::make_shared<JSONValue>(std::string("object"));
-        emptySchema["properties"] = std::make_shared<JSONValue>(JSONValue::Object{});
-        pImpl->toolMetadata[name] = Tool{name, std::string("Tool: ") + name, JSONValue{emptySchema}};
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->toolHandlers[name] = std::move(handler);
+        // Default metadata if not already provided via overload
+        if (pImpl->toolMetadata.find(name) == pImpl->toolMetadata.end()) {
+            JSONValue::Object emptySchema;
+            emptySchema["type"] = std::make_shared<JSONValue>(std::string("object"));
+            emptySchema["properties"] = std::make_shared<JSONValue>(JSONValue::Object{});
+            pImpl->toolMetadata[name] = Tool{name, std::string("Tool: ") + name, JSONValue{emptySchema}};
+        }
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
     }
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ToolListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    if (notify) { 
+        (void) this->NotifyToolsListChanged().get(); 
     }
 }
 
 void Server::RegisterTool(const Tool& tool, ToolHandler handler) {
     FUNC_SCOPE();
     LOG_DEBUG("Registering tool: {}", tool.name);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->toolHandlers[tool.name] = std::move(handler);
-    pImpl->toolMetadata[tool.name] = tool;
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ToolListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->toolHandlers[tool.name] = std::move(handler);
+        pImpl->toolMetadata[tool.name] = tool;
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+        (void) this->NotifyToolsListChanged().get();
     }
 }
 
 void Server::UnregisterTool(const std::string& name) {
     FUNC_SCOPE();
     LOG_DEBUG("Unregistering tool: {}", name);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->toolHandlers.erase(name);
-    pImpl->toolMetadata.erase(name);
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ToolListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->toolHandlers.erase(name);
+        pImpl->toolMetadata.erase(name);
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+        (void) this->NotifyToolsListChanged().get();
     }
 }
 
 void Server::RegisterResource(const std::string& uri, ResourceHandler handler) {
     FUNC_SCOPE();
     LOG_DEBUG("Registering resource: {}", uri);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->resourceHandlers[uri] = std::move(handler);
-    pImpl->resourceUris.push_back(uri);
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ResourceListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->resourceHandlers[uri] = std::move(handler);
+        pImpl->resourceUris.push_back(uri);
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+         (void) this->NotifyResourcesListChanged().get(); 
     }
 }
 
 void Server::UnregisterResource(const std::string& uri) {
     FUNC_SCOPE();
     LOG_DEBUG("Unregistering resource: {}", uri);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->resourceHandlers.erase(uri);
-    pImpl->resourceUris.erase(
-        std::remove(pImpl->resourceUris.begin(), pImpl->resourceUris.end(), uri),
-        pImpl->resourceUris.end());
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ResourceListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->resourceHandlers.erase(uri);
+        pImpl->resourceUris.erase(
+            std::remove(pImpl->resourceUris.begin(), pImpl->resourceUris.end(), uri),
+            pImpl->resourceUris.end());
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+         (void) this->NotifyResourcesListChanged().get();
     }
 }
 
 void Server::RegisterPrompt(const std::string& name, PromptHandler handler) {
     FUNC_SCOPE();
     LOG_DEBUG("Registering prompt: {}", name);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->promptHandlers[name] = std::move(handler);
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::PromptListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->promptHandlers[name] = std::move(handler);
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) { 
+        (void) this->NotifyPromptsListChanged().get(); 
     }
 }
 
 void Server::UnregisterPrompt(const std::string& name) {
     FUNC_SCOPE();
     LOG_DEBUG("Unregistering prompt: {}", name);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    pImpl->promptHandlers.erase(name);
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::PromptListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    { //scope for lock
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        pImpl->promptHandlers.erase(name);
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) { 
+        (void) this->NotifyPromptsListChanged().get(); 
     }
 }
 
@@ -1589,7 +1765,10 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
         pImpl->capabilities.experimental.erase("keepalive");
         if (pImpl->keepaliveThread.joinable()) {
             pImpl->keepaliveStop.store(true);
-            try { pImpl->keepaliveThread.join(); } catch (...) {}
+            try {
+                pImpl->keepaliveThread.join();
+            } catch (...) {
+            }
             pImpl->keepaliveStop.store(false);
         }
         return;
@@ -1610,10 +1789,16 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
         pImpl->keepaliveThread = std::thread([this]() {
             while (!pImpl->keepaliveStop.load()) {
                 int delay = pImpl->keepaliveIntervalMs.load();
-                if (delay <= 0) break;
+                if (delay <= 0) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                if (pImpl->keepaliveStop.load()) break;
-                if (!pImpl->transport || !pImpl->transport->IsConnected()) continue;
+                if (pImpl->keepaliveStop.load()) {
+                    break;
+                }
+                if (!pImpl->transport || !pImpl->transport->IsConnected()) {
+                    continue;
+                }
                 try {
                     pImpl->keepaliveSending.store(true);
                     pImpl->keepaliveSendFailed.store(false);
@@ -1630,10 +1815,16 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                     pImpl->keepaliveConsecutiveFailures.store(fails);
                     if (fails >= pImpl->keepaliveFailureThreshold.load()) {
                         LOG_ERROR("Keepalive failure threshold reached ({}); closing transport", fails);
-                        try { (void)pImpl->transport->Close(); } catch (...) {}
+                        try {
+                            (void)pImpl->transport->Close();
+                        } catch (...) {
+                        }
                         if (pImpl->errorCallback) {
-                            try { pImpl->errorCallback("Keepalive failure threshold reached; closing transport"); }
-                            catch (...) {}
+                            try {
+                                pImpl->errorCallback("Keepalive failure threshold reached; closing transport");
+                            }
+                            catch (...) {
+                            }
                         }
                         break;
                     }
@@ -1648,7 +1839,9 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
 void Server::SetKeepaliveFailureThreshold(const std::optional<unsigned int>& threshold) {
     FUNC_SCOPE();
     unsigned int t = threshold.has_value() ? threshold.value() : pImpl->keepaliveFailureThreshold.load();
-    if (t < 1u) t = 1u;
+    if (t < 1u) {
+        t = 1u;
+    }
     pImpl->keepaliveFailureThreshold.store(t);
     // If keepalive is enabled, update experimental advertisement with the new threshold
     if (pImpl->keepaliveIntervalMs.load() > 0) {
@@ -1682,7 +1875,7 @@ void Server::SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& per
     lv["perSecond"] = std::make_shared<JSONValue>(static_cast<int64_t>(n));
     pImpl->capabilities.experimental["loggingRateLimit"] = JSONValue{lv};
     // Reset window state
-    {
+    {//lock scope
         std::lock_guard<std::mutex> lk(pImpl->logRateMutex);
         pImpl->logWindowStart = std::chrono::steady_clock::now();
         pImpl->logWindowCount = 0u;
@@ -1702,37 +1895,41 @@ std::future<JSONValue> Server::RequestCreateMessageWithId(const CreateMessagePar
 void Server::RegisterResourceTemplate(const ResourceTemplate& resourceTemplate) {
     FUNC_SCOPE();
     LOG_DEBUG("Registering resource template: {}", resourceTemplate.uriTemplate);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    auto& v = pImpl->resourceTemplates;
-    v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == resourceTemplate.uriTemplate; }), v.end());
-    v.push_back(resourceTemplate);
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ResourceListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    {//lock scope
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        auto& v = pImpl->resourceTemplates;
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == resourceTemplate.uriTemplate; }), v.end());
+        v.push_back(resourceTemplate);
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+        (void) this->NotifyResourcesListChanged().get();
     }
 }
 
 void Server::UnregisterResourceTemplate(const std::string& uriTemplate) {
     FUNC_SCOPE();
     LOG_DEBUG("Unregistering resource template: {}", uriTemplate);
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    auto& v = pImpl->resourceTemplates;
-    v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == uriTemplate; }), v.end());
-    if (pImpl->transport && pImpl->transport->IsConnected()) {
-        auto n = std::make_unique<JSONRPCNotification>();
-        n->method = Methods::ResourceListChanged;
-        n->params = JSONValue{JSONValue::Object{}};
-        (void)pImpl->transport->SendNotification(std::move(n));
+    bool notify = false;
+    {//lock scope
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        auto& v = pImpl->resourceTemplates;
+        v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == uriTemplate; }), v.end());
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) { 
+        (void) this->NotifyResourcesListChanged().get();
     }
 }
 
 std::vector<ResourceTemplate> Server::ListResourceTemplates() {
     FUNC_SCOPE();
-    std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-    std::vector<ResourceTemplate> out = pImpl->resourceTemplates;
-    return out;
+    {//lock scope
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        std::vector<ResourceTemplate> out = pImpl->resourceTemplates;
+        return out;
+    }
 }
 
 void Server::SetErrorHandler(ErrorHandler handler) {
@@ -1766,7 +1963,9 @@ void Server::SetResourceReadChunkingMaxBytes(const std::optional<size_t>& maxByt
     } else {
         // Remove the field if present
         auto itMax = rrc.find("maxChunkBytes");
-        if (itMax != rrc.end()) rrc.erase(itMax);
+        if (itMax != rrc.end()) {
+            rrc.erase(itMax);
+        }
     }
     pImpl->capabilities.experimental["resourceReadChunking"] = JSONValue{rrc};
 }

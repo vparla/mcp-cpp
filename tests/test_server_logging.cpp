@@ -28,7 +28,9 @@ TEST(ServerLogging, RespectsClientLogLevel) {
     std::promise<std::string> gotErrorMsg; auto gotErrorFut = gotErrorMsg.get_future();
 
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
-        if (!note) return;
+        if (!note) {
+            return;
+        }
         if (note->method == Methods::Log && note->params.has_value()) {
             received.fetch_add(1u);
             const auto& v = note->params.value();
@@ -79,7 +81,9 @@ TEST(ServerLogging, WarningAliasDeliveredAtThreshold) {
     std::promise<JSONValue> gotPayload; auto fut = gotPayload.get_future();
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
         if (note && note->method == Methods::Log && note->params.has_value()) {
-            try { gotPayload.set_value(note->params.value()); } catch (...) {}
+            try {
+                gotPayload.set_value(note->params.value());
+            } catch (...) {}
         }
     });
 
@@ -160,9 +164,13 @@ TEST(ServerLogging, DeliversWarnWithStructuredData) {
     std::promise<JSONValue> gotPayload; auto payloadFut = gotPayload.get_future();
 
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
-        if (!note) return;
+        if (!note) {
+            return;
+        }
         if (note->method == Methods::Log && note->params.has_value()) {
-            try { gotPayload.set_value(note->params.value()); } catch (...) {}
+            try {
+                gotPayload.set_value(note->params.value());
+            } catch (...) {}
         }
     });
 
@@ -224,14 +232,18 @@ TEST(ServerLogging, DefaultLogLevelAllowsInfo) {
 
     std::promise<std::string> gotInfo; auto gotInfoFut = gotInfo.get_future();
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
-        if (!note) return;
+        if (!note) {
+            return;
+        }
         if (note->method == Methods::Log && note->params.has_value()) {
             const auto& v = note->params.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& o = std::get<JSONValue::Object>(v.value);
                 auto it = o.find("message");
                 if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
-                    try { gotInfo.set_value(std::get<std::string>(it->second->value)); } catch (...) {}
+                    try {
+                        gotInfo.set_value(std::get<std::string>(it->second->value));
+                    } catch (...) {}
                 }
             }
         }
