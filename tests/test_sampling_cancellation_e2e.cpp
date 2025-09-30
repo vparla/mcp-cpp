@@ -44,7 +44,9 @@ TEST(SamplingCancellationE2E, ServerCancelsClientCreateMessageById) {
             started.store(true);
             // Wait up to 2s or until cancellation requested
             for (int i = 0; i < 200; ++i) {
-                if (st.stop_requested()) break;
+                if (st.stop_requested()) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             // Return any result; server/client RPC layer should convert to Cancelled if stop was requested

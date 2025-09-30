@@ -122,10 +122,18 @@ public:
             int fl0 = ::fcntl(wakePipe[0], F_GETFL, 0);
             int fl1 = ::fcntl(wakePipe[1], F_GETFL, 0);
             if (fl0 >= 0) {
-                (void)::fcntl(wakePipe[0], F_SETFL, fl0 | O_NONBLOCK);
+                if (::fcntl(wakePipe[0], F_SETFL, fl0 | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on wakePipe[0] (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for wakePipe[0] (errno={} msg={})", errno, ::strerror(errno));
             }
             if (fl1 >= 0) {
-                (void)::fcntl(wakePipe[1], F_SETFL, fl1 | O_NONBLOCK);
+                if (::fcntl(wakePipe[1], F_SETFL, fl1 | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on wakePipe[1] (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for wakePipe[1] (errno={} msg={})", errno, ::strerror(errno));
             }
         }
     #endif
@@ -356,7 +364,13 @@ public:
 #ifndef _WIN32
             int fd = STDIN_FILENO;
             int flags = ::fcntl(fd, F_GETFL, 0);
-            if (flags >= 0) { (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK); }
+            if (flags >= 0) {
+                if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on stdin (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for stdin (errno={} msg={})", errno, ::strerror(errno));
+            }
 #endif
 
             while (connected) {
@@ -599,7 +613,9 @@ public:
                     lastReadTs = std::chrono::steady_clock::now();
                     while (connected) {
                         auto framed = tryExtractFrame(buffer);
-                        if (!framed.has_value()) break;
+                        if (!framed.has_value()) {
+                            break;
+                        }
                         processMessage(framed.value());
                     }
                 }
@@ -627,7 +643,13 @@ public:
 #ifndef _WIN32
             int fd = STDOUT_FILENO;
             int flags = ::fcntl(fd, F_GETFL, 0);
-            if (flags >= 0) { (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK); }
+            if (flags >= 0) {
+                if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on stdout (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for stdout (errno={} msg={})", errno, ::strerror(errno));
+            }
 #endif
             while (connected) {
                 std::string frame;
@@ -722,7 +744,9 @@ public:
                 {
                     std::lock_guard<std::mutex> lock(requestMutex);
                     for (const auto& kv : requestDeadlines) {
-                        if (kv.second <= now) expired.push_back(kv.first);
+                        if (kv.second <= now) {
+                            expired.push_back(kv.first);
+                        }
                     }
                     for (const auto& idStr : expired) {
                         auto it = pendingRequests.find(idStr);
@@ -1012,15 +1036,24 @@ std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::st
         try { out = static_cast<uint64_t>(std::stoull(s)); return true; } catch (...) { return false; }
     };
     auto parseSize = [](const std::string& s, std::size_t& out) -> bool {
-        try { unsigned long long v = std::stoull(s); out = static_cast<std::size_t>(v); return true; } catch (...) { return false; }
+        try { 
+            unsigned long long v = std::stoull(s); 
+            out = static_cast<std::size_t>(v); return true; 
+        } catch (...) { return false; }
     };
     std::string token;
     for (std::size_t i = 0; i < config.size();) {
         // Skip separators and spaces
-        while (i < config.size() && (config[i] == ';' || config[i] == ' ' || config[i] == '\t')) ++i;
-        if (i >= config.size()) break;
+        while (i < config.size() && (config[i] == ';' || config[i] == ' ' || config[i] == '\t')) {
+            ++i;
+        }
+        if (i >= config.size()) {
+            break;
+        }
         std::size_t start = i;
-        while (i < config.size() && config[i] != ';' && config[i] != ' ' && config[i] != '\t') ++i;
+        while (i < config.size() && config[i] != ';' && config[i] != ' ' && config[i] != '\t') {
+            ++i;
+        }
         token = config.substr(start, i - start);
         auto eq = token.find('=');
         if (eq != std::string::npos) {

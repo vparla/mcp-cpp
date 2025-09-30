@@ -42,7 +42,9 @@ TEST(ClientCacheExtended, ListResources_CacheHitAndInvalidate) {
     std::atomic<unsigned int> listCalls{0u};
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListResources) {
             listCalls.fetch_add(1u);
             JSONValue::Object resultObj;
@@ -92,7 +94,9 @@ TEST(ClientCacheExtended, ListPrompts_CacheHitAndInvalidate) {
     std::atomic<unsigned int> listCalls{0u};
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListPrompts) {
             listCalls.fetch_add(1u);
             JSONValue::Object resultObj;
@@ -142,7 +146,9 @@ TEST(ClientCacheExtended, ListTemplates_TtlExpiry) {
     std::atomic<unsigned int> listCalls{0u};
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListResourceTemplates) {
             listCalls.fetch_add(1u);
             JSONValue::Object resultObj;

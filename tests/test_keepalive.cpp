@@ -31,7 +31,9 @@ TEST(ServerKeepalive, SendsKeepaliveNotifications) {
     std::atomic<unsigned int> count{0u};
 
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
-        if (!note) return;
+        if (!note) {
+            return;
+        }
         if (note->method == Methods::Keepalive) {
             if (count.fetch_add(1u, std::memory_order_relaxed) == 0u) {
                 gotOnePromise.set_value();

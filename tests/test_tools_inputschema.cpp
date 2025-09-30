@@ -32,14 +32,20 @@ std::future<ToolResult> sampleEchoHandler(const JSONValue& arguments, std::stop_
 }
 
 bool hasRequiredField(const JSONValue& schema, const std::string& fieldName) {
-    if (!std::holds_alternative<JSONValue::Object>(schema.value)) return false;
+    if (!std::holds_alternative<JSONValue::Object>(schema.value)) {
+        return false;
+    }
     const auto& obj = std::get<JSONValue::Object>(schema.value);
     auto reqIt = obj.find("required");
-    if (reqIt == obj.end() || !std::holds_alternative<JSONValue::Array>(reqIt->second->value)) return false;
+    if (reqIt == obj.end() || !std::holds_alternative<JSONValue::Array>(reqIt->second->value)) {
+        return false;
+    }
     const auto& arr = std::get<JSONValue::Array>(reqIt->second->value);
     for (const auto& v : arr) {
         if (v && std::holds_alternative<std::string>(v->value)) {
-            if (std::get<std::string>(v->value) == fieldName) return true;
+            if (std::get<std::string>(v->value) == fieldName) {
+                return true;
+            }
         }
     }
     return false;

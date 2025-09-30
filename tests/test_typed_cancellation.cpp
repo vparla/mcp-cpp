@@ -63,7 +63,9 @@ TEST(TypedCancellation, ChunkReadStopsOnStopToken) {
     const size_t chunk = 3; // expect at most first 3 bytes to be reassembled
     auto agg = mcp::typed::readAllResourceInChunks(*client, uri, chunk, scaps, std::optional<std::stop_token>(tok)).get();
     std::string reassembled;
-    for (const auto& s : mcp::typed::collectText(agg)) reassembled += s;
+    for (const auto& s : mcp::typed::collectText(agg)) {
+        reassembled += s;
+    }
 
     // Cancellation should stop after first chunk
     EXPECT_EQ(reassembled, text.substr(0, chunk));

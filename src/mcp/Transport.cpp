@@ -108,8 +108,20 @@ public:
         } else {
             int fl0 = ::fcntl(wakePipe[0], F_GETFL, 0);
             int fl1 = ::fcntl(wakePipe[1], F_GETFL, 0);
-            if (fl0 >= 0) (void)::fcntl(wakePipe[0], F_SETFL, fl0 | O_NONBLOCK);
-            if (fl1 >= 0) (void)::fcntl(wakePipe[1], F_SETFL, fl1 | O_NONBLOCK);
+            if (fl0 >= 0) {
+                if (::fcntl(wakePipe[0], F_SETFL, fl0 | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on wakePipe[0] (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for wakePipe[0] (errno={} msg={})", errno, ::strerror(errno));
+            }
+            if (fl1 >= 0) {
+                if (::fcntl(wakePipe[1], F_SETFL, fl1 | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on wakePipe[1] (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for wakePipe[1] (errno={} msg={})", errno, ::strerror(errno));
+            }
         }
 #  endif
 #endif
@@ -157,7 +169,9 @@ public:
 
         // Read headers until blank line
         while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
             if (line.empty()) {
                 break; // end of headers
             }
@@ -174,7 +188,9 @@ public:
                         unsigned long long v64 = std::stoull(value);
                         if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
                             LOG_WARN("Invalid or too large Content-Length header: {}", value);
-                            if (errorHandler) errorHandler("StdioTransport: body too large");
+                            if (errorHandler) {
+                                errorHandler("StdioTransport: body too large");
+                            }
                             return std::nullopt;
                         }
                         contentLength = static_cast<std::size_t>(v64);
@@ -197,7 +213,9 @@ public:
 
         if (contentLength > MaxContentLength) {
             LOG_WARN("Content-Length {} exceeds max {}", contentLength, MaxContentLength);
-            if (errorHandler) errorHandler("StdioTransport: body too large");
+            if (errorHandler) {
+                errorHandler("StdioTransport: body too large");
+            }
             return std::nullopt;
         }
 
@@ -225,7 +243,9 @@ public:
                 // Find end of headers (CRLF CRLF)
                 const std::string sep = "\r\n\r\n";
                 std::size_t headerEnd = buf.find(sep);
-                if (headerEnd == std::string::npos) return std::nullopt;
+                if (headerEnd == std::string::npos) {
+                    return std::nullopt;
+                }
 
                 // Parse headers for Content-Length (case-insensitive)
                 std::size_t pos = 0;
@@ -233,7 +253,9 @@ public:
                 bool haveLength = false;
                 while (pos < headerEnd) {
                     std::size_t eol = buf.find("\r\n", pos);
-                    if (eol == std::string::npos || eol > headerEnd) break;
+                    if (eol == std::string::npos || eol > headerEnd) {
+                        break;
+                    }
                     std::string line = buf.substr(pos, eol - pos);
                     // Lowercase header name portion up to ':'
                     auto colon = line.find(':');
@@ -247,7 +269,9 @@ public:
                                 unsigned long long v64 = std::stoull(value);
                                 if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
                                     LOG_WARN("Content-Length {} exceeds limits (max={})", v64, MaxContentLength);
-                                    if (errorHandler) errorHandler("StdioTransport: body too large");
+                                    if (errorHandler) {
+                                        errorHandler("StdioTransport: body too large");
+                                    }
                                     // Drop these headers and continue reading fresh
                                     buf.erase(0, headerEnd + sep.size());
                                     return std::nullopt;
@@ -289,7 +313,13 @@ public:
             // POSIX: set stdin non-blocking to avoid any accidental blocking reads
             int fd = STDIN_FILENO;
             int flags = ::fcntl(fd, F_GETFL, 0);
-            if (flags >= 0) { (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK); }
+            if (flags >= 0) {
+                if (::fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+                    LOG_WARN("StdioTransport: failed to set O_NONBLOCK on stdin (errno={} msg={})", errno, ::strerror(errno));
+                }
+            } else {
+                LOG_WARN("StdioTransport: fcntl(F_GETFL) failed for stdin (errno={} msg={})", errno, ::strerror(errno));
+            }
 #endif
 
             while (connected) {
@@ -297,7 +327,9 @@ public:
 #ifdef _WIN32
                 ::HANDLE hIn = ::GetStdHandle(STD_INPUT_HANDLE);
                 if (!hIn || hIn == INVALID_HANDLE_VALUE) {
-                    if (errorHandler) errorHandler("StdioTransport: invalid STDIN handle");
+                    if (errorHandler) {
+                        errorHandler("StdioTransport: invalid STDIN handle");
+                    }
                     break;
                 }
                 DWORD fileType = ::GetFileType(hIn);
@@ -310,7 +342,9 @@ public:
                     if (!::PeekNamedPipe(hIn, NULL, 0, NULL, &available, NULL)) {
                         DWORD err = ::GetLastError();
                         LOG_ERROR("StdioTransport: PeekNamedPipe failed (err={})", static_cast<unsigned long>(err));
-                        if (errorHandler) errorHandler("StdioTransport: PeekNamedPipe failed");
+                        if (errorHandler) {
+                            errorHandler("StdioTransport: PeekNamedPipe failed");
+                        }
                         break;
                     }
                     if (available == 0) {
@@ -327,7 +361,9 @@ public:
                         } else {
                             DWORD err = ::GetLastError();
                             LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
-                            if (errorHandler) errorHandler("StdioTransport: WaitForMultipleObjects failed");
+                            if (errorHandler) {
+                                errorHandler("StdioTransport: WaitForMultipleObjects failed");
+                            }
                             break;
                         }
                     }
@@ -340,16 +376,22 @@ public:
                             DWORD err = ::GetLastError();
                             if (err == ERROR_BROKEN_PIPE) {
                                 LOG_INFO("StdioTransport: EOF on pipe");
-                                if (errorHandler) errorHandler("StdioTransport: EOF on pipe");
+                                if (errorHandler) {
+                                    errorHandler("StdioTransport: EOF on pipe");
+                                }
                             } else {
                                 LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
-                                if (errorHandler) errorHandler("StdioTransport: ReadFile failed");
+                                if (errorHandler) {
+                                    errorHandler("StdioTransport: ReadFile failed");
+                                }
                             }
                             break;
                         }
                         if (bytesRead == 0) {
                             LOG_INFO("StdioTransport: EOF on pipe");
-                            if (errorHandler) errorHandler("StdioTransport: EOF on pipe");
+                            if (errorHandler) {
+                                errorHandler("StdioTransport: EOF on pipe");
+                            }
                             break;
                         }
                         buffer.append(tmp.data(), tmp.data() + bytesRead);
@@ -363,16 +405,22 @@ public:
                             DWORD err = ::GetLastError();
                             if (err == ERROR_BROKEN_PIPE) {
                                 LOG_INFO("StdioTransport: EOF on stdin");
-                                if (errorHandler) errorHandler("StdioTransport: EOF on stdin");
+                                if (errorHandler) {
+                                    errorHandler("StdioTransport: EOF on stdin");
+                                }
                             } else {
                                 LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
-                                if (errorHandler) errorHandler("StdioTransport: ReadFile failed");
+                                if (errorHandler) {
+                                    errorHandler("StdioTransport: ReadFile failed");
+                                }
                             }
                             break;
                         }
                         if (bytesRead == 0) {
                             LOG_INFO("StdioTransport: EOF on stdin");
-                            if (errorHandler) errorHandler("StdioTransport: EOF on stdin");
+                            if (errorHandler) {
+                                errorHandler("StdioTransport: EOF on stdin");
+                            }
                             break;
                         }
                         buffer.append(tmp.data(), tmp.data() + bytesRead);
@@ -383,7 +431,9 @@ public:
                     } else if (wr != WAIT_TIMEOUT) {
                         DWORD err = ::GetLastError();
                         LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
-                        if (errorHandler) errorHandler("StdioTransport: WaitForMultipleObjects failed");
+                        if (errorHandler) {
+                            errorHandler("StdioTransport: WaitForMultipleObjects failed");
+                        }
                         break;
                     } // else timeout, just loop
                 }
@@ -411,7 +461,9 @@ public:
                             continue;
                         }
                         LOG_ERROR("StdioTransport: epoll_wait failed (errno={} msg={})", errno, ::strerror(errno));
-                        if (errorHandler) errorHandler("StdioTransport: epoll_wait failed");
+                        if (errorHandler) {
+                            errorHandler("StdioTransport: epoll_wait failed");
+                        }
                         break;
                     }
                     if (rc == 0) {
@@ -424,7 +476,9 @@ public:
                             if (ev.data.fd == fd) {
                                 if (ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
                                     LOG_INFO("StdioTransport: stdin closed (epoll flags={})", static_cast<unsigned int>(ev.events));
-                                    if (errorHandler) errorHandler("StdioTransport: stdin closed");
+                                    if (errorHandler) {
+                                        errorHandler("StdioTransport: stdin closed");
+                                    }
                                     woke = true; // forces break
                                 } else if (ev.events & EPOLLIN) {
                                     n = ::read(fd, tmp.data(), tmp.size());
@@ -463,7 +517,9 @@ public:
                         continue;
                     }
                     LOG_ERROR("StdioTransport: poll failed (errno={} msg={})", errno, ::strerror(errno));
-                    if (errorHandler) errorHandler("StdioTransport: poll failed");
+                    if (errorHandler) {
+                        errorHandler("StdioTransport: poll failed");
+                    }
                     break;
                 }
                 if (rc > 0) {
@@ -494,7 +550,9 @@ public:
                     }
                     if (pfds[0].revents & (POLLERR | POLLHUP)) {
                         LOG_INFO("StdioTransport: stdin closed (poll revents={})", static_cast<unsigned int>(pfds[0].revents));
-                        if (errorHandler) errorHandler("StdioTransport: stdin closed");
+                        if (errorHandler) {
+                            errorHandler("StdioTransport: stdin closed");
+                        }
                         break;
                     }
                     n = ::read(fd, tmp.data(), tmp.size());
@@ -505,12 +563,16 @@ public:
                     hadData = true;
                 } else if (n == 0) {
                     LOG_INFO("StdioTransport: EOF on stdin");
-                    if (errorHandler) errorHandler("StdioTransport: EOF on stdin");
+                    if (errorHandler) {
+                        errorHandler("StdioTransport: EOF on stdin");
+                    }
                     break;
                 } else if (n < 0) {
                     if (errno != 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
                         LOG_ERROR("StdioTransport: read error (errno={} msg={})", errno, ::strerror(errno));
-                        if (errorHandler) errorHandler("StdioTransport: read error");
+                        if (errorHandler) {
+                            errorHandler("StdioTransport: read error");
+                        }
                         break;
                     }
                 }
@@ -520,7 +582,9 @@ public:
                 if (hadData) {
                     while (connected) {
                         auto framed = tryExtractFrame(buffer);
-                        if (!framed.has_value()) break;
+                        if (!framed.has_value()) {
+                            break;
+                        }
                         processMessage(framed.value());
                     }
                 }
@@ -539,7 +603,9 @@ public:
                 {
                     std::lock_guard<std::mutex> lock(requestMutex);
                     for (const auto& kv : requestDeadlines) {
-                        if (kv.second <= now) expired.push_back(kv.first);
+                        if (kv.second <= now) {
+                            expired.push_back(kv.first);
+                        }
                     }
                     for (const auto& idStr : expired) {
                         auto it = pendingRequests.find(idStr);
@@ -659,9 +725,15 @@ std::future<void> StdioTransport::Close() {
         uint64_t one = 1;
         for (;;) {
             ssize_t w = ::write(pImpl->wakeEventFd, &one, sizeof(one));
-            if (w >= 0) break;
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) break; // already signaled
+            if (w >= 0) {
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; // already signaled
+            }
             LOG_WARN("StdioTransport: eventfd write failed (errno={} msg={})", errno, ::strerror(errno));
             break;
         }
@@ -671,9 +743,15 @@ std::future<void> StdioTransport::Close() {
         char b = 'x';
         for (;;) {
             ssize_t w = ::write(pImpl->wakePipe[1], &b, 1);
-            if (w >= 0) break;
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) break; // pipe full, reader will see POLLIN
+            if (w >= 0) {
+                break;
+            }
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                break; // pipe full, reader will see POLLIN
+            }
             LOG_WARN("StdioTransport: wake pipe write failed (errno={} msg={})", errno, ::strerror(errno));
             break;
         }
@@ -1070,7 +1148,9 @@ std::future<void> InMemoryTransport::SendNotification(
     std::string serialized = notification->Serialize();
     LOG_DEBUG("Sending in-memory notification: {}", serialized);
     if (!pImpl->sendToPeer(serialized)) {
-        if (pImpl->errorHandler) pImpl->errorHandler("Peer not connected");
+        if (pImpl->errorHandler) {
+            pImpl->errorHandler("Peer not connected");
+        }
     }
     
     std::promise<void> promise;
@@ -1102,7 +1182,9 @@ std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::st
     if (pos != std::string::npos) {
         pos += std::string("timeout_ms=").size();
         std::size_t end = pos;
-        while (end < config.size() && config[end] >= '0' && config[end] <= '9') ++end;
+        while (end < config.size() && config[end] >= '0' && config[end] <= '9') {
+            ++end;
+        }
         if (end > pos) {
             const std::string num = config.substr(pos, end - pos);
             try {

@@ -603,11 +603,17 @@ mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
                         if (std::holds_alternative<JSONValue::Object>(toolJson->value)) {
                             const auto& toolObj = std::get<JSONValue::Object>(toolJson->value);
                             auto nameIt = toolObj.find("name");
-                            if (nameIt != toolObj.end() && std::holds_alternative<std::string>(nameIt->second->value)) tool.name = std::get<std::string>(nameIt->second->value);
+                            if (nameIt != toolObj.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                                tool.name = std::get<std::string>(nameIt->second->value);
+                            }
                             auto descIt = toolObj.find("description");
-                            if (descIt != toolObj.end() && std::holds_alternative<std::string>(descIt->second->value)) tool.description = std::get<std::string>(descIt->second->value);
+                            if (descIt != toolObj.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                                tool.description = std::get<std::string>(descIt->second->value);
+                            }
                             auto schemaIt = toolObj.find("inputSchema");
-                            if (schemaIt != toolObj.end()) tool.inputSchema = *schemaIt->second;
+                            if (schemaIt != toolObj.end()) {
+                                tool.inputSchema = *schemaIt->second;
+                            }
                         }
                         tools.push_back(std::move(tool));
                     }
@@ -693,8 +699,11 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
                 }
                 auto curIt = obj.find("nextCursor");
                 if (curIt != obj.end()) {
-                    if (std::holds_alternative<std::string>(curIt->second->value)) out.nextCursor = std::get<std::string>(curIt->second->value);
-                    else if (std::holds_alternative<int64_t>(curIt->second->value)) out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    if (std::holds_alternative<std::string>(curIt->second->value)) {
+                        out.nextCursor = std::get<std::string>(curIt->second->value);
+                    } else if (std::holds_alternative<int64_t>(curIt->second->value)) {
+                        out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    }
                 }
             }
         }
@@ -750,17 +759,27 @@ mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
                 if (resIt != obj.end() && std::holds_alternative<JSONValue::Array>(resIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(resIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Resource r;
                         auto uriIt = item.find("uri");
-                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) r.uri = std::get<std::string>(uriIt->second->value);
+                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) {
+                            r.uri = std::get<std::string>(uriIt->second->value);
+                        }
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) r.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            r.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) r.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            r.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) r.mimeType = std::get<std::string>(mimeIt->second->value);
+                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
+                            r.mimeType = std::get<std::string>(mimeIt->second->value);
+                        }
                         resources.push_back(std::move(r));
                     }
                 }
@@ -781,9 +800,15 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListResources;
     JSONValue::Object params;
-    if (cursor.has_value()) params["cursor"] = std::make_shared<JSONValue>(cursor.value());
-    if (limit.has_value() && *limit > 0) params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
-    if (!params.empty()) request->params = JSONValue{params};
+    if (cursor.has_value()) {
+        params["cursor"] = std::make_shared<JSONValue>(cursor.value());
+    }
+    if (limit.has_value() && *limit > 0) {
+        params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
+    }
+    if (!params.empty()) {
+        request->params = JSONValue{params};
+    }
     auto fut = this->transport->SendRequest(std::move(request));
     ResourcesListResult out;
     try {
@@ -816,24 +841,37 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
                 if (arrIt != obj.end() && std::holds_alternative<JSONValue::Array>(arrIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(arrIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Resource r;
                         auto uriIt = item.find("uri");
-                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) r.uri = std::get<std::string>(uriIt->second->value);
+                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) {
+                            r.uri = std::get<std::string>(uriIt->second->value);
+                        }
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) r.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            r.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) r.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            r.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) r.mimeType = std::get<std::string>(mimeIt->second->value);
+                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
+                            r.mimeType = std::get<std::string>(mimeIt->second->value);
+                        }
                         out.resources.push_back(std::move(r));
                     }
                 }
                 auto curIt = obj.find("nextCursor");
                 if (curIt != obj.end()) {
-                    if (std::holds_alternative<std::string>(curIt->second->value)) out.nextCursor = std::get<std::string>(curIt->second->value);
-                    else if (std::holds_alternative<int64_t>(curIt->second->value)) out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    if (std::holds_alternative<std::string>(curIt->second->value)) {
+                        out.nextCursor = std::get<std::string>(curIt->second->value);
+                    } else if (std::holds_alternative<int64_t>(curIt->second->value)) {
+                        out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    }
                 }
             }
         }
@@ -889,17 +927,27 @@ mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemp
                 if (tIt != obj.end() && std::holds_alternative<JSONValue::Array>(tIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(tIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         ResourceTemplate rt;
                         auto utIt = item.find("uriTemplate");
-                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) rt.uriTemplate = std::get<std::string>(utIt->second->value);
+                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) {
+                            rt.uriTemplate = std::get<std::string>(utIt->second->value);
+                        }
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) rt.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            rt.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) rt.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            rt.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) rt.mimeType = std::get<std::string>(mimeIt->second->value);
+                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
+                            rt.mimeType = std::get<std::string>(mimeIt->second->value);
+                        }
                         templates.push_back(std::move(rt));
                     }
                 }
@@ -920,9 +968,15 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListResourceTemplates;
     JSONValue::Object params;
-    if (cursor.has_value()) params["cursor"] = std::make_shared<JSONValue>(cursor.value());
-    if (limit.has_value() && *limit > 0) params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
-    if (!params.empty()) request->params = JSONValue{params};
+    if (cursor.has_value()) {
+        params["cursor"] = std::make_shared<JSONValue>(cursor.value());
+    }
+    if (limit.has_value() && *limit > 0) {
+        params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
+    }
+    if (!params.empty()) {
+        request->params = JSONValue{params};
+    }
     auto fut = this->transport->SendRequest(std::move(request));
     ResourceTemplatesListResult out;
     try {
@@ -955,28 +1009,44 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
                 if (arrIt != obj.end() && std::holds_alternative<JSONValue::Array>(arrIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(arrIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         ResourceTemplate rt;
                         auto utIt = item.find("uriTemplate");
-                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) rt.uriTemplate = std::get<std::string>(utIt->second->value);
+                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) {
+                            rt.uriTemplate = std::get<std::string>(utIt->second->value);
+                        }
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) rt.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            rt.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) rt.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            rt.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) rt.mimeType = std::get<std::string>(mimeIt->second->value);
+                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
+                            rt.mimeType = std::get<std::string>(mimeIt->second->value);
+                        }
                         out.resourceTemplates.push_back(std::move(rt));
                     }
                 }
                 auto curIt = obj.find("nextCursor");
                 if (curIt != obj.end()) {
-                    if (std::holds_alternative<std::string>(curIt->second->value)) out.nextCursor = std::get<std::string>(curIt->second->value);
-                    else if (std::holds_alternative<int64_t>(curIt->second->value)) out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    if (std::holds_alternative<std::string>(curIt->second->value)) {
+                        out.nextCursor = std::get<std::string>(curIt->second->value);
+                    } else if (std::holds_alternative<int64_t>(curIt->second->value)) {
+                        out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    }
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListResourceTemplatesPaged exception: {}", e.what()); throw; }
+    } catch (const std::exception& e) {
+        LOG_ERROR("ListResourceTemplatesPaged exception: {}", e.what()); 
+        throw; 
+    }
     co_return out;
 }
 
@@ -1028,21 +1098,32 @@ mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
                 if (pIt != obj.end() && std::holds_alternative<JSONValue::Array>(pIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(pIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Prompt pr;
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) pr.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            pr.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) pr.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            pr.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto argsIt = item.find("arguments");
-                        if (argsIt != item.end()) pr.arguments = *argsIt->second;
+                        if (argsIt != item.end()) {
+                            pr.arguments = *argsIt->second;
+                        }
                         prompts.push_back(std::move(pr));
                     }
                 }
             }
         }
-    } catch (const std::exception& e) { LOG_ERROR("ListPrompts exception: {}", e.what()); throw; }
+    } catch (const std::exception& e) {
+        LOG_ERROR("ListPrompts exception: {}", e.what()); 
+        throw; 
+    }
     if (this->listingsCacheTtlMs.has_value() && this->listingsCacheTtlMs.value() > 0) {
         std::lock_guard<std::mutex> lk(this->cacheMutex);
         this->promptsCache.data = prompts;
@@ -1057,9 +1138,15 @@ mcp::async::Task<PromptsListResult> Client::Impl::coListPromptsPaged(const std::
     auto request = std::make_unique<JSONRPCRequest>();
     request->method = Methods::ListPrompts;
     JSONValue::Object params;
-    if (cursor.has_value()) params["cursor"] = std::make_shared<JSONValue>(cursor.value());
-    if (limit.has_value() && *limit > 0) params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
-    if (!params.empty()) request->params = JSONValue{params};
+    if (cursor.has_value()) {
+        params["cursor"] = std::make_shared<JSONValue>(cursor.value());
+    }
+    if (limit.has_value() && *limit > 0) {
+        params["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
+    }
+    if (!params.empty()) {
+        request->params = JSONValue{params};
+    }
     auto fut = this->transport->SendRequest(std::move(request));
     PromptsListResult out;
     try {
@@ -1092,22 +1179,33 @@ mcp::async::Task<PromptsListResult> Client::Impl::coListPromptsPaged(const std::
                 if (arrIt != obj.end() && std::holds_alternative<JSONValue::Array>(arrIt->second->value)) {
                     const auto& arr = std::get<JSONValue::Array>(arrIt->second->value);
                     for (const auto& itemPtr : arr) {
-                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) continue;
+                        if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
+                            continue;
+                        }
                         const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Prompt pr;
                         auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) pr.name = std::get<std::string>(nameIt->second->value);
+                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
+                            pr.name = std::get<std::string>(nameIt->second->value);
+                        }
                         auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) pr.description = std::get<std::string>(descIt->second->value);
+                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
+                            pr.description = std::get<std::string>(descIt->second->value);
+                        }
                         auto argsIt = item.find("arguments");
-                        if (argsIt != item.end()) pr.arguments = *argsIt->second;
+                        if (argsIt != item.end()) {
+                            pr.arguments = *argsIt->second;
+                        }
                         out.prompts.push_back(std::move(pr));
                     }
                 }
                 auto curIt = obj.find("nextCursor");
                 if (curIt != obj.end()) {
-                    if (std::holds_alternative<std::string>(curIt->second->value)) out.nextCursor = std::get<std::string>(curIt->second->value);
-                    else if (std::holds_alternative<int64_t>(curIt->second->value)) out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    if (std::holds_alternative<std::string>(curIt->second->value)) {
+                        out.nextCursor = std::get<std::string>(curIt->second->value);
+                    } else if (std::holds_alternative<int64_t>(curIt->second->value)) {
+                        out.nextCursor = std::to_string(std::get<int64_t>(curIt->second->value));
+                    }
                 }
             }
         }
@@ -1127,8 +1225,12 @@ mcp::async::Task<JSONValue> Client::Impl::coReadResource(const std::string& uri)
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response) {
-            if (response->result.has_value()) co_return response->result.value();
-            if (response->error.has_value()) co_return response->error.value();
+            if (response->result.has_value()) {
+                co_return response->result.value();
+            }
+            if (response->error.has_value()) {
+                co_return response->error.value();
+            }
         }
     } catch (const std::exception& e) { LOG_ERROR("ReadResource exception: {}", e.what()); }
     co_return JSONValue{};
@@ -1152,8 +1254,12 @@ mcp::async::Task<JSONValue> Client::Impl::coReadResource(const std::string& uri,
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response) {
-            if (response->result.has_value()) co_return response->result.value();
-            if (response->error.has_value()) co_return response->error.value();
+            if (response->result.has_value()) {
+                co_return response->result.value();
+            }
+            if (response->error.has_value()) {
+                co_return response->error.value();
+            }
         }
     } catch (const std::exception& e) { LOG_ERROR("ReadResource(range) exception: {}", e.what()); }
     co_return JSONValue{};
@@ -1172,10 +1278,16 @@ mcp::async::Task<JSONValue> Client::Impl::coGetPrompt(const std::string& name, c
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         if (response) {
-            if (response->result.has_value()) co_return response->result.value();
-            if (response->error.has_value()) co_return response->error.value();
+            if (response->result.has_value()) {
+                co_return response->result.value();
+            }
+            if (response->error.has_value()) {
+                co_return response->error.value();
+            }
         }
-    } catch (const std::exception& e) { LOG_ERROR("GetPrompt exception: {}", e.what()); }
+    } catch (const std::exception& e) { 
+        LOG_ERROR("GetPrompt exception: {}", e.what());
+    }
     co_return JSONValue{};
 }
 

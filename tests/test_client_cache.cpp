@@ -105,7 +105,9 @@ TEST(ClientCache, ListTools_CacheDisabled_Default) {
     std::atomic<unsigned int> listCalls{0};
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListTools) {
             listCalls.fetch_add(1);
             JSONValue::Object resultObj; JSONValue::Array tools; JSONValue::Object t; t["name"] = std::make_shared<JSONValue>(std::string("t1")); t["description"] = std::make_shared<JSONValue>(std::string("d")); tools.push_back(std::make_shared<JSONValue>(t)); resultObj["tools"] = std::make_shared<JSONValue>(tools);

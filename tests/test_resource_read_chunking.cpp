@@ -98,7 +98,9 @@ TEST(ResourceReadChunking, ReadAllResourceInChunks_ClampSmallerThanRequested) {
     const size_t requestedChunk = 8;
     auto agg = mcp::typed::readAllResourceInChunks(*client, uri, requestedChunk).get();
     std::string reassembled;
-    for (const auto& s : mcp::typed::collectText(agg)) reassembled += s;
+    for (const auto& s : mcp::typed::collectText(agg)) {
+        reassembled += s;
+    }
     EXPECT_EQ(reassembled, text);
 
     ASSERT_NO_THROW(client->Disconnect().get());
@@ -482,7 +484,9 @@ TEST(ResourceReadChunking, ReadAllResourceInChunks_Reassembles) {
     const size_t chunkSize = 8;
     auto agg = mcp::typed::readAllResourceInChunks(*client, uri, chunkSize).get();
     std::string reassembled;
-    for (const auto& s : mcp::typed::collectText(agg)) reassembled += s;
+    for (const auto& s : mcp::typed::collectText(agg)) {
+        reassembled += s;
+    }
     EXPECT_EQ(reassembled, text);
 
     ASSERT_NO_THROW(client->Disconnect().get());

@@ -78,7 +78,9 @@ TEST(ValidationLists, ResourcesList_InvalidShape_Throws) {
     auto serverTrans = std::move(pair.second);
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListResources) {
             JSONValue::Object resultObj;
             JSONValue::Array resources;
@@ -111,7 +113,9 @@ TEST(ValidationLists, ResourceTemplatesList_InvalidShape_Throws) {
     auto serverTrans = std::move(pair.second);
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListResourceTemplates) {
             JSONValue::Object resultObj;
             JSONValue::Array arr;
@@ -144,7 +148,9 @@ TEST(ValidationLists, PromptsList_InvalidShape_Throws) {
     auto serverTrans = std::move(pair.second);
 
     serverTrans->SetRequestHandler([&](const JSONRPCRequest& req) -> std::unique_ptr<JSONRPCResponse> {
-        if (req.method == Methods::Initialize) return makeInitializeResponse(req.id);
+        if (req.method == Methods::Initialize) {
+            return makeInitializeResponse(req.id);
+        }
         if (req.method == Methods::ListPrompts) {
             JSONValue::Object resultObj;
             JSONValue::Array arr;

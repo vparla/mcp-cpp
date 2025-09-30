@@ -59,7 +59,9 @@ TEST(ResourceReadChunkingOverload, ClampAwareOverload_UsesMinAndReassembles) {
     const size_t preferred = 8;
     auto agg = mcp::typed::readAllResourceInChunks(*client, uri, preferred, clampHint).get();
     std::string reassembled;
-    for (const auto& s : mcp::typed::collectText(agg)) reassembled += s;
+    for (const auto& s : mcp::typed::collectText(agg)) {
+        reassembled += s;
+    }
     EXPECT_EQ(reassembled, text);
 
     ASSERT_NO_THROW(client->Disconnect().get());
