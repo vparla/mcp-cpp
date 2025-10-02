@@ -43,6 +43,7 @@
 #include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
 #include "env/EnvVars.h"
+#include "mcp/HTTPTransport.hpp"
 
 
 namespace mcp {
@@ -1200,6 +1201,38 @@ std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::st
 
 std::unique_ptr<ITransport> InMemoryTransportFactory::CreateTransport(const std::string& /*config*/) {
     return std::make_unique<InMemoryTransport>();
+}
+
+std::unique_ptr<ITransport> HTTPTransportFactory::CreateTransport(const std::string& config) {
+    HTTPTransport::Options opts;
+    // Very small key=value parser; keys separated by ';'
+    // Supported keys: scheme, host, port, rpcPath, notifyPath, serverName, caFile, caPath
+    auto parse = [&](const std::string& s) {
+        size_t start = 0;
+        while (start < s.size()) {
+            size_t end = s.find(';', start);
+            if (end == std::string::npos) end = s.size();
+            std::string kv = s.substr(start, end - start);
+            size_t eq = kv.find('=');
+            if (eq != std::string::npos) {
+                std::string k = kv.substr(0, eq);
+                std::string v = kv.substr(eq + 1);
+                if (k == "scheme") opts.scheme = v;
+                else if (k == "host") opts.host = v;
+                else if (k == "port") opts.port = v;
+                else if (k == "rpcPath") opts.rpcPath = v;
+                else if (k == "notifyPath") opts.notifyPath = v;
+                else if (k == "serverName") opts.serverName = v;
+                else if (k == "caFile") opts.caFile = v;
+                else if (k == "caPath") opts.caPath = v;
+            }
+            start = end + 1;
+        }
+    };
+    if (!config.empty()) {
+        parse(config);
+    }
+    return std::make_unique<HTTPTransport>(opts);
 }
 
 } // namespace mcp

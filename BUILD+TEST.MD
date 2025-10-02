@@ -45,6 +45,31 @@ docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --l
 wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
+### Full suite (unit/integration + HTTPS e2e)
+
+Run the entire test suite including the two-node HTTPS e2e tests. This script:
+
+- Builds `Dockerfile.demo` test target and runs `ctest` (verbose).
+- Builds the HTTPS e2e image in `tests/http/`.
+- Runs two containers (`http-server`, `http-client`) via `docker-compose` and streams logs.
+
+- Linux/macOS:
+```bash
+cd /path/to/mcp-cpp
+chmod +x scripts/*.sh
+./scripts/ci_all.sh
+```
+
+- Windows (PowerShell via WSL2 Ubuntu):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && chmod +x scripts/*.sh && ./scripts/ci_all.sh"
+```
+
+Notes:
+- The script shows a complete test list (`ctest -N`) and then runs all tests (`ctest -VV --progress`).
+- HTTPS e2e logs from both server and client containers are streamed to the terminal.
+- Set `MCP_LOG_LEVEL=DEBUG` to increase e2e verbosity.
+
 Tips:
 - Add `--no-cache` to force a fresh test run.
 - CTest output will display pass/fail for each test. Example tests live in `tests/` (e.g., `tests/test_inmemory_transport.cpp`).

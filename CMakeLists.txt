@@ -44,6 +44,8 @@ add_library(mcp_cpp STATIC
     src/mcp/JSONParser.cpp
     src/mcp/StdioTransport.cpp
     src/mcp/InMemoryTransport.cpp
+    src/mcp/HTTPTransport.cpp
+    src/mcp/HTTPServer.cpp
     src/mcp/Client.cpp
     src/mcp/Server.cpp
 )
@@ -67,6 +69,28 @@ target_include_directories(mcp_cpp
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+# HTTP Transport dependencies: header-only Boost (Beast/Asio) + OpenSSL
+find_path(BOOST_INCLUDE_DIR NAMES boost/beast.hpp PATH_SUFFIXES include)
+if(NOT BOOST_INCLUDE_DIR)
+  message(FATAL_ERROR "Boost headers not found. Please install Boost headers (e.g., libboost-dev or vcpkg).")
+endif()
+find_package(OpenSSL REQUIRED)
+
+target_include_directories(mcp_cpp PUBLIC ${BOOST_INCLUDE_DIR})
+target_compile_definitions(mcp_cpp PUBLIC
+  BOOST_ERROR_CODE_HEADER_ONLY
+  BOOST_SYSTEM_NO_DEPRECATED
+  BOOST_ASIO_NO_DEPRECATED)
+
+target_link_libraries(mcp_cpp PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+
+if(WIN32)
+  target_link_libraries(mcp_cpp PUBLIC ws2_32)
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(mcp_cpp PUBLIC Threads::Threads)
+endif()
 
 # Platform-specific defines (reserved for future use)
 if(WIN32)
@@ -97,4 +121,5 @@ endif()
 if(MCP_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+  add_subdirectory(tests/http)
 endif()

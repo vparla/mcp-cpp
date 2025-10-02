@@ -1,18 +1,21 @@
-# syntax=docker/dockerfile:1.7
-
 # SPDX-License-Identifier: MIT
-# Demo Dockerfile: builds the SDK and runs client+server together without touching the main build Dockerfile
+# Copyright (c) 2025 Vinny Parla
+# File: Dockerfile.demo
+# Purpose: builds the SDK and runs client+server together without touching the main build Dockerfile
 
 # 1) Build stage
 FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS build
 ARG TARGETPLATFORM
 ARG TARGETARCH
-
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential \
       cmake \
       ninja-build \
+      libssl-dev \
+      libboost-dev \
+      ca-certificates \
+      openssl \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -27,6 +30,7 @@ FROM build AS test
 ARG MCP_STDIOTRANSPORT_TIMEOUT_MS
 ENV MCP_STDIOTRANSPORT_TIMEOUT_MS=${MCP_STDIOTRANSPORT_TIMEOUT_MS}
 ENV GTEST_COLOR=yes
+ENV CTEST_OUTPUT_ON_FAILURE=1
 WORKDIR /src
 RUN ctest --test-dir build -VV --progress
 
@@ -37,6 +41,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash \
       coreutils \
+      ca-certificates \
+      openssl \
  && rm -rf /var/lib/apt/lists/*
 
 # Route logs to stderr to avoid corrupting stdio JSON-RPC frames

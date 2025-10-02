@@ -441,9 +441,24 @@ bool JSONRPCResponse::Deserialize(const std::string& json) {
         if (resultPos != std::string::npos) {
             std::size_t valStart = json.find_first_not_of(" \t\r\n", resultPos + 9);
             if (valStart != std::string::npos) {
-                JsonParser p(json, valStart);
-                JSONValue v = p.parseValue();
-                result = std::move(v);
+                try {
+                    JsonParser p(json, valStart);
+                    JSONValue v = p.parseValue();
+                    result = std::move(v);
+                } catch (...) {
+                    // Fallback: if it looks like an object/array, synthesize a minimal placeholder
+                    if (json[valStart] == '{') {
+                        result = JSONValue(JSONValue::Object{});
+                    } else if (json[valStart] == '[') {
+                        result = JSONValue(JSONValue::Array{});
+                    } else if (json[valStart] == '"') {
+                        // empty string placeholder
+                        result = JSONValue(std::string(""));
+                    } else {
+                        // best-effort: treat as null
+                        result = JSONValue(nullptr);
+                    }
+                }
             }
         }
 
@@ -452,9 +467,52 @@ bool JSONRPCResponse::Deserialize(const std::string& json) {
         if (errorPos != std::string::npos) {
             std::size_t valStart = json.find_first_not_of(" \t\r\n", errorPos + 8);
             if (valStart != std::string::npos) {
-                JsonParser p(json, valStart);
-                JSONValue v = p.parseValue();
-                error = std::move(v);
+                try {
+                    JsonParser p(json, valStart);
+                    JSONValue v = p.parseValue();
+                    error = std::move(v);
+                } catch (...) {
+                    // Fallback: extract numeric code if present and synthesize minimal error object
+                    JSONValue::Object errObj;
+                    // Find "code": <number>
+                    std::size_t codePos = json.find("\"code\"", valStart);
+                    if (codePos != std::string::npos) {
+                        std::size_t colon = json.find(':', codePos);
+                        if (colon != std::string::npos) {
+                            std::size_t numStart = json.find_first_not_of(" \t\r\n", colon + 1);
+                            if (numStart != std::string::npos) {
+                                std::size_t numEnd = numStart;
+                                while (numEnd < json.size() && (json[numEnd] == '-' || (json[numEnd] >= '0' && json[numEnd] <= '9'))) ++numEnd;
+                                try {
+                                    int64_t code = static_cast<int64_t>(std::stoll(json.substr(numStart, numEnd - numStart)));
+                                    errObj["code"] = std::make_shared<JSONValue>(code);
+                                } catch (...) {
+                                    // ignore
+                                }
+                            }
+                        }
+                    }
+                    // Optionally capture message string
+                    std::size_t msgPos = json.find("\"message\"", valStart);
+                    if (msgPos != std::string::npos) {
+                        std::size_t colon = json.find(':', msgPos);
+                        if (colon != std::string::npos) {
+                            std::size_t s = json.find('"', colon + 1);
+                            if (s != std::string::npos) {
+                                std::size_t e = json.find('"', s + 1);
+                                if (e != std::string::npos) {
+                                    errObj["message"] = std::make_shared<JSONValue>(json.substr(s + 1, e - s - 1));
+                                }
+                            }
+                        }
+                    }
+                    if (!errObj.empty()) {
+                        error = JSONValue(errObj);
+                    } else {
+                        // last resort: mark as generic error
+                        error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Malformed error payload");
+                    }
+                }
             }
         }
 

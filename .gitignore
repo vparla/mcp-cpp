@@ -104,3 +104,7 @@ coverage/
 build-issues.md
 #task.md
 /MCP\ SDK.code-workspace
+
+# Local CI artifacts
+.ci/
+.ci/*.tar
