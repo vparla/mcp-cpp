@@ -10,16 +10,36 @@
 
 namespace mcp {
 
+//==========================================================================================================
+// VersionInfo
+// Purpose: Semantic version components.
+// Fields:
+//   major, minor, patch: Version components.
+//==========================================================================================================
 struct VersionInfo {
     int major;
     int minor;
     int patch;
 };
 
-// Returns the library semantic version components
+//==========================================================================================================
+// getVersion
+// Purpose: Returns the library semantic version components.
+// Args:
+//   (none)
+// Returns:
+//   VersionInfo {major, minor, patch}
+//==========================================================================================================
 VersionInfo getVersion();
 
-// Returns the semantic version as a string: "MAJOR.MINOR.PATCH"
+//==========================================================================================================
+// getVersionString
+// Purpose: Returns the semantic version string.
+// Args:
+//   (none)
+// Returns:
+//   std::string formatted as "MAJOR.MINOR.PATCH"
+//==========================================================================================================
 std::string getVersionString();
 
 } // namespace mcp

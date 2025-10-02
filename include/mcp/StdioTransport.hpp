@@ -12,39 +12,89 @@
 
 namespace mcp {
 
+//==========================================================================================================
+// StdioTransport
+// Purpose: JSON-RPC transport over stdin/stdout suitable for local tool integrations.
+//==========================================================================================================
 class StdioTransport : public ITransport {
 public:
     StdioTransport();
     virtual ~StdioTransport();
 
-    // ITransport implementation
+    ////////////////////////////////////////// ITransport //////////////////////////////////////////
+    //==========================================================================================================
+    // Starts the stdio transport reader/writer loops.
+    // Returns:
+    //   Future that completes when loops are running.
+    //==========================================================================================================
     std::future<void> Start() override;
+
+    //==========================================================================================================
+    // Closes the transport and stops reader/writer loops.
+    // Returns:
+    //   Future that completes when closed.
+    //==========================================================================================================
     std::future<void> Close() override;
+
+    //==========================================================================================================
+    // Indicates whether transport is connected.
+    //==========================================================================================================
     bool IsConnected() const override;
+
+    //==========================================================================================================
+    // Returns a diagnostic session identifier.
+    //==========================================================================================================
     std::string GetSessionId() const override;
 
+    //==========================================================================================================
+    // Sends a JSON-RPC request and returns a future for the response.
+    //==========================================================================================================
     std::future<std::unique_ptr<JSONRPCResponse>> SendRequest(
         std::unique_ptr<JSONRPCRequest> request) override;
+        
+    //==========================================================================================================
+    // Sends a JSON-RPC notification (no response expected).
+    //==========================================================================================================
     std::future<void> SendNotification(
         std::unique_ptr<JSONRPCNotification> notification) override;
 
+    //==========================================================================================================
+    // Registers handlers for incoming notifications, requests (if supported), and errors.
+    //==========================================================================================================
     void SetNotificationHandler(NotificationHandler handler) override;
     void SetRequestHandler(RequestHandler handler) override;
     void SetErrorHandler(ErrorHandler handler) override;
 
-    // Optional: configure request timeout (milliseconds). Defaults to 30000 ms.
+    //==========================================================================================================
+    // SetRequestTimeoutMs
+    // Purpose: Configure maximum time to wait for a single request/response pair.
+    // Args:
+    //   timeoutMs: Timeout in milliseconds (default ~30000 when not set).
+    //==========================================================================================================
     void SetRequestTimeoutMs(uint64_t timeoutMs);
 
-    // Optional: configure idle read timeout (milliseconds). If > 0, transport will emit an error
-    // and close when no bytes are received for the given duration.
+    //==========================================================================================================
+    // SetIdleReadTimeoutMs
+    // Purpose: If > 0, emit an error and close when no bytes arrive for the given duration.
+    // Args:
+    //   timeoutMs: Idle read timeout in milliseconds (0 disables idle timeout).
+    //==========================================================================================================
     void SetIdleReadTimeoutMs(uint64_t timeoutMs);
 
-    // Optional: configure maximum bytes allowed in the write queue for backpressure.
-    // When exceeded, transport will emit an error and close.
+    //==========================================================================================================
+    // SetWriteQueueMaxBytes
+    // Purpose: Backpressure clamp for pending write buffers.
+    // Args:
+    //   maxBytes: Maximum allowed bytes in write queue before emitting an error and closing.
+    //==========================================================================================================
     void SetWriteQueueMaxBytes(std::size_t maxBytes);
 
-    // Optional: configure per-frame write timeout (milliseconds).
-    // When a frame cannot be fully written within this time, transport emits an error and closes.
+    //==========================================================================================================
+    // SetWriteTimeoutMs
+    // Purpose: Per-frame write timeout.
+    // Args:
+    //   timeoutMs: Milliseconds to allow for writing a frame before error/close.
+    //==========================================================================================================
     void SetWriteTimeoutMs(uint64_t timeoutMs);
 
 private:
