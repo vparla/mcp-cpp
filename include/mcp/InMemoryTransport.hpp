@@ -79,6 +79,10 @@ private:
     std::unique_ptr<Impl> pImpl;
 };
 
+//==========================================================================================================
+// InMemoryTransportFactory
+// Purpose: Factory for creating in-memory transports.
+//==========================================================================================================
 class InMemoryTransportFactory : public ITransportFactory {
 public:
     std::unique_ptr<ITransport> CreateTransport(const std::string& config) override;

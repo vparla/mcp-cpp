@@ -11,13 +11,14 @@
 #include <future>
 #include <functional>
 #include <memory>
-
+#include "mcp/Transport.h"
 #include "mcp/JSONRPCTypes.h"
 
 namespace mcp {
 
-class HTTPServer {
-public:
+  // Note: HTTPServer implements the server-side acceptor role (ITransportAcceptor)
+  class HTTPServer : public ITransportAcceptor {
+  public:
     //==========================================================================================================
     // Options
     // Purpose: Configuration for bind address/port, JSON-RPC paths, and TLS files.
@@ -39,10 +40,6 @@ public:
         std::string keyFile;  // PEM (required for https)
     };
 
-    using RequestHandler = std::function<std::unique_ptr<JSONRPCResponse>(const JSONRPCRequest&)>;
-    using NotificationHandler = std::function<void(std::unique_ptr<JSONRPCNotification>)>;
-    using ErrorHandler   = std::function<void(const std::string&)>;
-
     explicit HTTPServer(const Options& opts);
     ~HTTPServer();
 
@@ -51,39 +48,52 @@ public:
     // Returns:
     //   Future that becomes ready once the I/O context is running.
     //==========================================================================================================
-    std::future<void> Start();
+    std::future<void> Start() override;
 
     //==========================================================================================================
     // Stops the server: closes acceptor, stops I/O context, and joins background thread.
     // Returns:
     //   Future that completes when shutdown has finished.
     //==========================================================================================================
-    std::future<void> Stop();
+    std::future<void> Stop() override;
 
     //==========================================================================================================
     // Sets the request handler (JSON-RPC request -> response).
     // Args:
     //   handler: Callback invoked per request; may return an error response.
     //==========================================================================================================
-    void SetRequestHandler(RequestHandler handler);
+    void SetRequestHandler(ITransport::RequestHandler handler) override;
 
     //==========================================================================================================
     // Sets the notification handler (no response expected).
     // Args:
     //   handler: Callback invoked per notification with ownership of the notification object.
     //==========================================================================================================
-    void SetNotificationHandler(NotificationHandler handler);
+    void SetNotificationHandler(ITransport::NotificationHandler handler) override;
     
     //==========================================================================================================
     // Sets the error handler for transport/server errors.
     // Args:
     //   handler: Callback invoked with error strings.
     //==========================================================================================================
-    void SetErrorHandler(ErrorHandler handler);
+    void SetErrorHandler(ITransport::ErrorHandler handler) override;
 
 private:
     class Impl;
     std::unique_ptr<Impl> pImpl;
-};
+  };
+
+  //==========================================================================================================
+  // HTTPServerFactory
+  // Purpose: Factory for creating HTTP/HTTPS server acceptors (ITransportAcceptor) from a configuration
+  //          string. The configuration format is uri format, intentionally simple and stable:
+  //            - "http://<address>:<port>" (e.g., http://127.0.0.1:0)
+  //            - "https://<address>:<port>?cert=<pem>&key=<pem>"
+  //          Unknown parameters are ignored. If scheme is omitted, defaults to http.
+  //==========================================================================================================
+  class HTTPServerFactory : public ITransportAcceptorFactory {
+  public:
+    std::unique_ptr<ITransportAcceptor> CreateTransportAcceptor(const std::string& config) override;
+  };
 
 } // namespace mcp

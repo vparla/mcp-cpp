@@ -9,6 +9,13 @@
 #include <chrono>
 #include <thread>
 #include <future>
+#include <cstring>
+#include <cerrno>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <unistd.h>
 
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/HTTPTransport.hpp"
@@ -20,12 +27,47 @@ static std::string envOr(const char* key, const char* defVal) {
     return v ? std::string(v) : std::string(defVal);
 }
 
+static bool serverListening(const std::string& host, const std::string& port, int timeoutMs = 300) {
+    struct addrinfo hints{}; std::memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; hints.ai_socktype = SOCK_STREAM; hints.ai_protocol = IPPROTO_TCP;
+    struct addrinfo* res = nullptr;
+    int rc = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &res);
+    if (rc != 0 || !res) return false;
+    bool ok = false;
+    for (struct addrinfo* p = res; p && !ok; p = p->ai_next) {
+        int fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (fd < 0) continue;
+        int flags = ::fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) (void)::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        int c = ::connect(fd, p->ai_addr, p->ai_addrlen);
+        if (c == 0) { ok = true; ::close(fd); break; }
+        if (errno == EINPROGRESS) {
+            fd_set wfds; FD_ZERO(&wfds); FD_SET(fd, &wfds);
+            struct timeval tv; tv.tv_sec = timeoutMs / 1000; tv.tv_usec = (timeoutMs % 1000) * 1000;
+            int sel = ::select(fd + 1, nullptr, &wfds, nullptr, &tv);
+            if (sel > 0 && FD_ISSET(fd, &wfds)) {
+                int soErr = 0; socklen_t sl = sizeof(soErr);
+                if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &sl) == 0 && soErr == 0) {
+                    ok = true; ::close(fd); break;
+                }
+            }
+        }
+        ::close(fd);
+    }
+    if (res) ::freeaddrinfo(res);
+    return ok;
+}
+
 TEST(Http, BasicRoundtrip) {
     auto host = envOr("MCP_HTTP_HOST", "http-server");
     auto port = envOr("MCP_HTTP_PORT", "9443");
     auto rpc = envOr("MCP_HTTP_RPC", "/mcp/rpc");
     auto caFile = envOr("MCP_HTTP_CA", "/certs/cert.pem");
     auto sni = envOr("MCP_HTTP_SNI", "http-server");
+
+    if (!serverListening(host, port)) {
+        GTEST_SKIP() << "HTTP server unavailable (" << host << ":" << port << ") – skipping e2e roundtrip";
+    }
 
     mcp::HTTPTransport::Options opts;
     opts.scheme = "https";
@@ -54,7 +96,12 @@ TEST(Http, BasicRoundtrip) {
 }
 
 TEST(Http, MethodNotFound) {
-    mcp::HTTPTransport::Options opts; opts.scheme = "https"; opts.host = envOr("MCP_HTTP_HOST", "http-server"); opts.port = envOr("MCP_HTTP_PORT", "9443"); opts.serverName = envOr("MCP_HTTP_SNI", "http-server"); opts.caFile = envOr("MCP_HTTP_CA", "/certs/cert.pem");
+    auto host = envOr("MCP_HTTP_HOST", "http-server");
+    auto port = envOr("MCP_HTTP_PORT", "9443");
+    if (!serverListening(host, port)) {
+        GTEST_SKIP() << "HTTP server unavailable (" << host << ":" << port << ") – skipping method-not-found e2e";
+    }
+    mcp::HTTPTransport::Options opts; opts.scheme = "https"; opts.host = host; opts.port = port; opts.serverName = envOr("MCP_HTTP_SNI", "http-server"); opts.caFile = envOr("MCP_HTTP_CA", "/certs/cert.pem");
     mcp::HTTPTransport transport(opts); transport.Start().wait(); ASSERT_TRUE(transport.IsConnected());
 
     auto req = std::make_unique<mcp::JSONRPCRequest>();

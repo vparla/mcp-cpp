@@ -22,8 +22,11 @@ WORKDIR /src
 COPY . .
 
 # Configure and build (Release + tests)
+# Show Ninja progress and limit parallelism to reduce resource contention inside Docker
+ENV NINJA_STATUS="[%f/%t %o/sec %es] "
+ENV CMAKE_BUILD_PARALLEL_LEVEL=6
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMCP_BUILD_TESTS=ON \
- && cmake --build build -j
+ && cmake --build build -j -- -v
 
 # 1b) Test stage: run unit tests inside the build environment
 FROM build AS test
@@ -32,7 +35,9 @@ ENV MCP_STDIOTRANSPORT_TIMEOUT_MS=${MCP_STDIOTRANSPORT_TIMEOUT_MS}
 ENV GTEST_COLOR=yes
 ENV CTEST_OUTPUT_ON_FAILURE=1
 WORKDIR /src
-RUN ctest --test-dir build -VV --progress
+# Set a per-test timeout to avoid indefinite hangs and show verbose progress
+ENV CTEST_PARALLEL_LEVEL=4
+RUN ctest --test-dir build -VV --progress --timeout 180
 
 # 2) Demo runtime stage
 FROM ubuntu:24.04 AS demo

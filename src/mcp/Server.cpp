@@ -11,6 +11,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <limits>
 #include <stop_token>
 #include <thread>
 #include <unordered_map>
@@ -1811,10 +1812,14 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                 }
                 pImpl->keepaliveSending.store(false);
                 if (pImpl->keepaliveSendFailed.load()) {
-                    unsigned int fails = 1u + pImpl->keepaliveConsecutiveFailures.load();
-                    pImpl->keepaliveConsecutiveFailures.store(fails);
-                    if (fails >= pImpl->keepaliveFailureThreshold.load()) {
-                        LOG_ERROR("Keepalive failure threshold reached ({}); closing transport", fails);
+                    unsigned int prev = pImpl->keepaliveConsecutiveFailures.load();
+                    unsigned int next = prev;
+                    if (next != std::numeric_limits<unsigned int>::max()) {
+                        ++next;
+                    }
+                    pImpl->keepaliveConsecutiveFailures.store(next);
+                    if (next >= pImpl->keepaliveFailureThreshold.load()) {
+                        LOG_ERROR("Keepalive failure threshold reached ({}); closing transport", next);
                         try {
                             (void)pImpl->transport->Close();
                         } catch (...) {

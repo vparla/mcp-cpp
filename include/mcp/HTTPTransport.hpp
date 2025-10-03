@@ -98,6 +98,10 @@ private:
     std::unique_ptr<Impl> pImpl;
 };
 
+//==========================================================================================================
+// HTTPTransportFactory
+// Purpose: Factory for creating HTTP/HTTPS transports.
+//==========================================================================================================
 class HTTPTransportFactory : public ITransportFactory {
 public:
     std::unique_ptr<ITransport> CreateTransport(const std::string& config) override;

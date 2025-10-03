@@ -9,6 +9,8 @@
 #include <thread>
 #include <atomic>
 #include <sstream>
+#include <algorithm>
+#include <cctype>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -41,9 +43,9 @@ public:
     std::unique_ptr<ssl::context> sslCtx; // present when scheme==https
     std::thread ioThread;
 
-    HTTPServer::RequestHandler requestHandler;
-    HTTPServer::NotificationHandler notificationHandler;
-    HTTPServer::ErrorHandler errorHandler;
+    ITransport::RequestHandler requestHandler;
+    ITransport::NotificationHandler notificationHandler;
+    ITransport::ErrorHandler errorHandler;
 
     explicit Impl(const HTTPServer::Options& o) : opts(o) {
         if (opts.scheme == "https") {
@@ -206,6 +208,27 @@ public:
 
     net::awaitable<void> acceptLoop() {
         try {
+            // Validate port strictly: numeric and within [0, 65535]
+            if (opts.port.empty()) {
+                setError("HTTPServer invalid port: empty");
+                co_return;
+            }
+            bool allDigits = std::all_of(opts.port.begin(), opts.port.end(), [](unsigned char ch){ return std::isdigit(ch) != 0; });
+            if (!allDigits) {
+                setError(std::string("HTTPServer invalid port (non-numeric): ") + opts.port);
+                co_return;
+            }
+            unsigned long portNum = 0;
+            try {
+                portNum = std::stoul(opts.port);
+            } catch (...) {
+                setError(std::string("HTTPServer invalid port (parse failure): ") + opts.port);
+                co_return;
+            }
+            if (portNum > 65535ul) {
+                setError(std::string("HTTPServer invalid port (out of range): ") + opts.port);
+                co_return;
+            }
             tcp::resolver resolver(co_await net::this_coro::executor);
             auto r = resolver.resolve(opts.address, opts.port);
             tcp::endpoint ep = *r.begin();
@@ -284,14 +307,97 @@ std::future<void> HTTPServer::Stop() {
     return fut;
 }
 
-void HTTPServer::SetRequestHandler(RequestHandler handler) { 
+void HTTPServer::SetRequestHandler(ITransport::RequestHandler handler) { 
     pImpl->requestHandler = std::move(handler);
 }
-void HTTPServer::SetNotificationHandler(NotificationHandler handler) { 
+void HTTPServer::SetNotificationHandler(ITransport::NotificationHandler handler) { 
     pImpl->notificationHandler = std::move(handler);
 }
-void HTTPServer::SetErrorHandler(ErrorHandler handler) {
-    pImpl->errorHandler = std::move(handler);
+  
+void HTTPServer::SetErrorHandler(ITransport::ErrorHandler handler) {
+      pImpl->errorHandler = std::move(handler);
+ }
+
+std::unique_ptr<ITransportAcceptor> HTTPServerFactory::CreateTransportAcceptor(const std::string& config) {
+    HTTPServer::Options opts;
+    // Factory default: http if scheme omitted
+    opts.scheme = "http";
+
+    std::string cfg = config;
+    // Trim leading/trailing spaces
+    auto trim = [](std::string& s){
+        auto notSpace = [](unsigned char c){ return !std::isspace(c); };
+        s.erase(s.begin(), std::find_if(s.begin(), s.end(), notSpace));
+        s.erase(std::find_if(s.rbegin(), s.rend(), notSpace).base(), s.end());
+    };
+    trim(cfg);
+
+    // Detect scheme
+    auto startsWith = [](const std::string& s, const char* pfx){ return s.rfind(pfx, 0) == 0; };
+    if (startsWith(cfg, "http://")) {
+        opts.scheme = "http";
+        cfg = cfg.substr(7);
+    } else if (startsWith(cfg, "https://")) {
+        opts.scheme = "https";
+        cfg = cfg.substr(8);
+    }
+
+    // Split query params
+    std::string hostPortPath = cfg;
+    std::string query;
+    auto qpos = cfg.find('?');
+    if (qpos != std::string::npos) {
+        hostPortPath = cfg.substr(0, qpos);
+        query = cfg.substr(qpos + 1);
+    }
+
+    // Strip path component if present
+    std::string hostPort = hostPortPath;
+    auto slash = hostPortPath.find('/');
+    if (slash != std::string::npos) {
+        hostPort = hostPortPath.substr(0, slash);
+    }
+    trim(hostPort);
+
+    // Parse host[:port] including IPv4/IPv6 in [addr]:port form
+    if (!hostPort.empty()) {
+        if (hostPort.front() == '[') {
+            auto rb = hostPort.find(']');
+            if (rb != std::string::npos) {
+                opts.address = hostPort.substr(1, rb - 1);
+                if (rb + 1 < hostPort.size() && hostPort[rb + 1] == ':') {
+                    opts.port = hostPort.substr(rb + 2);
+                }
+            }
+        } else {
+            auto colon = hostPort.rfind(':');
+            if (colon != std::string::npos) {
+                opts.address = hostPort.substr(0, colon);
+                opts.port = hostPort.substr(colon + 1);
+            } else {
+                opts.address = hostPort;
+            }
+        }
+        trim(opts.address);
+        trim(opts.port);
+        if (opts.port.empty()) opts.port = "9443"; // default
+    }
+
+    // Parse query parameters: cert, key
+    if (!query.empty()) {
+        std::stringstream ss(query);
+        std::string kv;
+        while (std::getline(ss, kv, '&')) {
+            auto eq = kv.find('=');
+            std::string key = (eq == std::string::npos) ? kv : kv.substr(0, eq);
+            std::string val = (eq == std::string::npos) ? std::string() : kv.substr(eq + 1);
+            if (key == "cert") opts.certFile = val;
+            else if (key == "key") opts.keyFile = val;
+        }
+    }
+
+    // Return server acceptor
+    return std::unique_ptr<ITransportAcceptor>(new HTTPServer(opts));
 }
 
 } // namespace mcp

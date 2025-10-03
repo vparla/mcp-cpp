@@ -53,4 +53,4 @@ target_include_directories(http_client_tests
 )
 
 include(GoogleTest)
-# We will launch the test binary directly in the container
+gtest_discover_tests(http_client_tests)

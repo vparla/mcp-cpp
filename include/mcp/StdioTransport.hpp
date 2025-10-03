@@ -102,6 +102,10 @@ private:
     std::unique_ptr<Impl> pImpl;
 };
 
+//==========================================================================================================
+// StdioTransportFactory
+// Purpose: Factory for creating stdio transports.
+//==========================================================================================================
 class StdioTransportFactory : public ITransportFactory {
 public:
     std::unique_ptr<ITransport> CreateTransport(const std::string& config) override;

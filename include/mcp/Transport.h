@@ -124,6 +124,8 @@ public:
 // Concrete transports are declared in their respective headers:
 //  - mcp/StdioTransport.hpp
 //  - mcp/InMemoryTransport.hpp
+//  - mcp/HTTPTransport.hpp
+//  - mcp/HTTPServer.hpp (implements ITransportAcceptor)
 
 //==========================================================================================================
 // Transport factory interface
@@ -142,5 +144,80 @@ public:
     //==========================================================================================================
     virtual std::unique_ptr<ITransport> CreateTransport(const std::string& config) = 0;
 };
+
+//==========================================================================================================
+// ITransportAcceptor
+// Purpose: Server-side acceptor interface which owns the listen lifecycle and dispatches incoming
+//          JSON-RPC requests/notifications to registered handlers.
+// Notes:
+//   - Keeps the multi-client accept/listen role separate from the single-session ITransport.
+//   - Implementations should bind/listen in Start(), stop/teardown in Stop(), and invoke the
+//     registered handlers upon incoming messages.
+//   - This interface mirrors the handler signatures of ITransport for consistency.
+//==========================================================================================================
+class ITransportAcceptor {
+public:
+    virtual ~ITransportAcceptor() = default;
+
+    //==========================================================================================================
+    // Starts the acceptor (binds/listens/spawns accept loop as needed).
+    // Args:
+    //   (none)
+    // Returns:
+    //   Future that completes when the accept loop is running.
+    //==========================================================================================================
+    virtual std::future<void> Start() = 0;
+
+    //==========================================================================================================
+    // Stops the acceptor and releases resources (closes listener and active sessions gracefully).
+    // Args:
+    //   (none)
+    // Returns:
+    //   Future that completes when the acceptor has stopped.
+    //==========================================================================================================
+    virtual std::future<void> Stop() = 0;
+
+    //==========================================================================================================
+    // Registers the server-side JSON-RPC request handler. Invoked per request, must return a response.
+    // Args:
+    //   handler: Callback taking const JSONRPCRequest& and returning unique_ptr<JSONRPCResponse>.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetRequestHandler(ITransport::RequestHandler handler) = 0;
+
+    //==========================================================================================================
+    // Registers the JSON-RPC notification handler (no response expected).
+    // Args:
+    //   handler: Callback invoked with ownership of the incoming notification object.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetNotificationHandler(ITransport::NotificationHandler handler) = 0;
+
+    //==========================================================================================================
+    // Registers an error handler to receive acceptor/transport errors.
+    // Args:
+    //   handler: Callback receiving error strings.
+    virtual void SetErrorHandler(ITransport::ErrorHandler handler) = 0;
+};
+
+//==========================================================================================================
+// Transport acceptor factory interface
+// Purpose: Factory for creating server-side acceptors from configuration strings.
+//==========================================================================================================
+  class ITransportAcceptorFactory {
+  public:
+    virtual ~ITransportAcceptorFactory() = default;
+
+    //==========================================================================================================
+    // Creates a server-side acceptor instance using the provided configuration.
+    // Args:
+    //   config: Transport-specific configuration string (e.g., "http://127.0.0.1:9443").
+    // Returns:
+    //   A unique_ptr to a newly created ITransportAcceptor.
+    //==========================================================================================================
+    virtual std::unique_ptr<ITransportAcceptor> CreateTransportAcceptor(const std::string& config) = 0;
+  };
 
 } // namespace mcp

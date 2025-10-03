@@ -159,19 +159,18 @@ TEST(ClientPaging, ResourceTemplatesListPaged) {
     Implementation clientInfo{"Paging Test Client", "1.0.0"};
     auto client = factory.CreateClient(clientInfo);
     ASSERT_NO_THROW(client->Connect(std::move(clientTransport)).get());
-
     ClientCapabilities caps; caps.sampling = SamplingCapability{};
     auto initFut = client->Initialize(clientInfo, caps);
     ASSERT_EQ(initFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
     (void)initFut.get();
 
     // Register 5 templates
-    for (int i = 1; i <= 5; ++i) {
-        ResourceTemplate rt{std::string("mem://{") + "k" + std::to_string(i) + "}",
-                            std::string("KV") + std::to_string(i),
-                            std::optional<std::string>("desc"),
-                            std::optional<std::string>("application/json")};
-        server.RegisterResourceTemplate(rt);
+    for (size_t i = 1; i <= 5u; ++i) { 
+      ResourceTemplate rt{std::string("mem://{") + "k" + std::to_string(i) + "}",
+                          std::string("KV") + std::to_string(i),
+                          std::optional<std::string>("desc"),
+                          std::optional<std::string>("application/json")};
+      server.RegisterResourceTemplate(rt);
     }
 
     auto p1 = client->ListResourceTemplatesPaged(std::optional<std::string>{}, 2);

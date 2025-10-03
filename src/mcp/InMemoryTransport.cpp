@@ -81,9 +81,10 @@ public:
             std::size_t i = 0; auto isWs = [](char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
             while (i < s.size() && isWs(s[i])) { ++i; }
             if (i >= s.size() || s[i] != '{') { return false; }
-            ++i; int depth = 1; bool inStr = false; bool esc = false;
+            ++i; unsigned int depth = 1u; bool inStr = false; bool esc = false;
             while (i < s.size()) {
-                char c = s[i++];
+                char c = s[i];
+                ++i;
                 if (inStr) {
                     if (esc) { esc = false; continue; }
                     if (c == '\\') { esc = true; continue; }
@@ -108,7 +109,15 @@ public:
                     continue;
                 }
                 if (c == '{') { ++depth; continue; }
-                if (c == '}') { --depth; if (depth == 0) { break; } continue; }
+                if (c == '}') {
+                    if (depth > 0u) {
+                        --depth;
+                        if (depth == 0u) { break; }
+                    } else {
+                        break;
+                    }
+                    continue;
+                }
                 // ignore other characters, including arrays
             }
             return false;

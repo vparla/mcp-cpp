@@ -9,6 +9,7 @@
 #include <cctype>
 #include <stdexcept>
 #include <iomanip>
+#include <cstdint>
 #include "mcp/JSONRPCTypes.h"
 #include "logging/Logger.h"
 
@@ -69,11 +70,15 @@ struct JsonParser {
         ++i; // skip opening quote
         std::string out;
         while (i < s.size()) {
-            char c = s[i++];
+            unsigned char uc = static_cast<unsigned char>(s[i]);
+            ++i;
+            char c = static_cast<char>(uc);
             if (c == '"') break;
             if (c == '\\') {
                 if (i >= s.size()) throw std::runtime_error("Invalid escape");
-                char e = s[i++];
+                unsigned char ue = static_cast<unsigned char>(s[i]);
+                ++i;
+                char e = static_cast<char>(ue);
                 switch (e) {
                     case '"': out.push_back('"'); break;
                     case '\\': out.push_back('\\'); break;
@@ -97,15 +102,21 @@ struct JsonParser {
                             else if (h >= 'A' && h <= 'F') code += 10 + (h - 'A');
                             else throw std::runtime_error("Invalid hex in unicode escape");
                         }
-                        if (code <= 0x7F) {
-                            out.push_back(static_cast<char>(code));
-                        } else if (code <= 0x7FF) {
-                            out.push_back(static_cast<char>(0xC0 | ((code >> 6) & 0x1F)));
-                            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                        if (code <= 0x7Fu) {
+                            uint8_t b = static_cast<uint8_t>(code & 0x7Fu);
+                            out.push_back(static_cast<char>(b));
+                        } else if (code <= 0x7FFu) {
+                            uint8_t b1 = static_cast<uint8_t>(0xC0u | ((code >> 6) & 0x1Fu));
+                            uint8_t b2 = static_cast<uint8_t>(0x80u | (code & 0x3Fu));
+                            out.push_back(static_cast<char>(b1));
+                            out.push_back(static_cast<char>(b2));
                         } else {
-                            out.push_back(static_cast<char>(0xE0 | ((code >> 12) & 0x0F)));
-                            out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
-                            out.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+                            uint8_t b1 = static_cast<uint8_t>(0xE0u | ((code >> 12) & 0x0Fu));
+                            uint8_t b2 = static_cast<uint8_t>(0x80u | ((code >> 6) & 0x3Fu));
+                            uint8_t b3 = static_cast<uint8_t>(0x80u | (code & 0x3Fu));
+                            out.push_back(static_cast<char>(b1));
+                            out.push_back(static_cast<char>(b2));
+                            out.push_back(static_cast<char>(b3));
                         }
                         break;
                     }
