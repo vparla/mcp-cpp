@@ -14,6 +14,7 @@
 #include <limits>
 #include <stop_token>
 #include <thread>
+#include <condition_variable>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -81,6 +82,8 @@ private:
     std::atomic<unsigned int> keepaliveFailureThreshold{3u};
     std::atomic<bool> keepaliveSending{false};
     std::atomic<bool> keepaliveSendFailed{false};
+    std::mutex keepaliveMutex;
+    std::condition_variable cvKeepalive;
 
     // Client logging preference (minimum severity)
     std::atomic<Logger::Level> clientLogMin{Logger::Level::DEBUG};
@@ -890,10 +893,8 @@ mcp::async::Task<void> Server::Impl::coStart(std::unique_ptr<ITransport> transpo
 
     this->transport->SetErrorHandler([this](const std::string& err){
         LOG_ERROR("Transport error: {}", err);
-        // If an error occurs during a keepalive send, mark last send as failed
-        if (this->keepaliveSending.load()) {
-            this->keepaliveSendFailed.store(true);
-        }
+        // Treat any transport error as a keepalive send failure to avoid races
+        this->keepaliveSendFailed.store(true);
         if (this->errorCallback) {
             try { 
                 this->errorCallback(err);
@@ -982,34 +983,33 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
 }
 
 void Server::Impl::sendInitializedAndListChangedAsync() {
-    std::thread([this]() {
-        try {
-            auto note = std::make_unique<JSONRPCNotification>();
-            note->method = Methods::Initialized;
-            note->params = JSONValue{JSONValue::Object{}};
-            (void)this->transport->SendNotification(std::move(note));
-            {
-                auto n = std::make_unique<JSONRPCNotification>();
-                n->method = Methods::ToolListChanged;
-                n->params = JSONValue{JSONValue::Object{}};
-                (void)this->transport->SendNotification(std::move(n));
-            }
-            {
-                auto n = std::make_unique<JSONRPCNotification>();
-                n->method = Methods::ResourceListChanged;
-                n->params = JSONValue{JSONValue::Object{}};
-                (void)this->transport->SendNotification(std::move(n));
-            }
-            {
-                auto n = std::make_unique<JSONRPCNotification>();
-                n->method = Methods::PromptListChanged;
-                n->params = JSONValue{JSONValue::Object{}};
-                (void)this->transport->SendNotification(std::move(n));
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Initialized/list_changed async send exception: {}", e.what());
+    // Send synchronously to avoid lifetime races in tests/demos
+    try {
+        auto note = std::make_unique<JSONRPCNotification>();
+        note->method = Methods::Initialized;
+        note->params = JSONValue{JSONValue::Object{}};
+        (void)this->transport->SendNotification(std::move(note));
+        {
+            auto n = std::make_unique<JSONRPCNotification>();
+            n->method = Methods::ToolListChanged;
+            n->params = JSONValue{JSONValue::Object{}};
+            (void)this->transport->SendNotification(std::move(n));
         }
-    }).detach();
+        {
+            auto n = std::make_unique<JSONRPCNotification>();
+            n->method = Methods::ResourceListChanged;
+            n->params = JSONValue{JSONValue::Object{}};
+            (void)this->transport->SendNotification(std::move(n));
+        }
+        {
+            auto n = std::make_unique<JSONRPCNotification>();
+            n->method = Methods::PromptListChanged;
+            n->params = JSONValue{JSONValue::Object{}};
+            (void)this->transport->SendNotification(std::move(n));
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Initialized/list_changed send exception: {}", e.what());
+    }
 }
 
 // Common helpers for paging and strict validation (used by list handlers)
@@ -1168,6 +1168,7 @@ mcp::async::Task<void> Server::Impl::coStop() {
     LOG_INFO("Stopping MCP server");
     if (this->keepaliveThread.joinable()) {
         this->keepaliveStop.store(true);
+        this->cvKeepalive.notify_all();
         try {
             this->keepaliveThread.join();
         } catch (...) {
@@ -1512,6 +1513,7 @@ Server::~Server() {
     // Ensure keepalive thread is stopped
     if (pImpl && pImpl->keepaliveThread.joinable()) {
         pImpl->keepaliveStop.store(true);
+        pImpl->cvKeepalive.notify_all();
         try {
             pImpl->keepaliveThread.join();
         } catch (...) {
@@ -1766,10 +1768,11 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
         pImpl->capabilities.experimental.erase("keepalive");
         if (pImpl->keepaliveThread.joinable()) {
             pImpl->keepaliveStop.store(true);
+            // Wake the keepalive thread if it's waiting
+            pImpl->cvKeepalive.notify_all();
             try {
                 pImpl->keepaliveThread.join();
-            } catch (...) {
-            }
+            } catch (...) {}
             pImpl->keepaliveStop.store(false);
         }
         return;
@@ -1783,6 +1786,8 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
     pImpl->capabilities.experimental["keepalive"] = JSONValue{kv};
 
     pImpl->keepaliveIntervalMs.store(ms);
+    // Wake the keepalive thread to re-evaluate the interval immediately
+    pImpl->cvKeepalive.notify_all();
 
     // Start background loop if not running
     if (!pImpl->keepaliveThread.joinable()) {
@@ -1790,13 +1795,20 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
         pImpl->keepaliveThread = std::thread([this]() {
             while (!pImpl->keepaliveStop.load()) {
                 int delay = pImpl->keepaliveIntervalMs.load();
-                if (delay <= 0) {
-                    break;
+                if (delay <= 0) { break; }
+                {
+                    std::unique_lock<std::mutex> lk(pImpl->keepaliveMutex);
+                    // Wake early if stop requested or interval changes
+                    bool pred = pImpl->cvKeepalive.wait_for(
+                        lk,
+                        std::chrono::milliseconds(delay),
+                        [this, delay]() { return pImpl->keepaliveStop.load() || pImpl->keepaliveIntervalMs.load() != delay; }
+                    );
+                    (void)pred; // if pred true and interval changed, loop re-evaluates delay; if stop, loop breaks below
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(delay));
-                if (pImpl->keepaliveStop.load()) {
-                    break;
-                }
+                if (pImpl->keepaliveStop.load()) { break; }
+                // Re-check interval and connection after potential interval change
+                if (pImpl->keepaliveIntervalMs.load() <= 0) { break; }
                 if (!pImpl->transport || !pImpl->transport->IsConnected()) {
                     continue;
                 }
@@ -1807,8 +1819,13 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                     n->method = Methods::Keepalive;
                     n->params = JSONValue{JSONValue::Object{}};
                     (void)pImpl->transport->SendNotification(std::move(n));
-                } catch (...) {
+                } catch (const std::exception& e) {
                     pImpl->keepaliveSendFailed.store(true);
+                    if (pImpl->errorCallback) {
+                        try {
+                            pImpl->errorCallback("Keepalive failure: " + std::string(e.what()));
+                        } catch (...) {}
+                    }
                 }
                 pImpl->keepaliveSending.store(false);
                 if (pImpl->keepaliveSendFailed.load()) {
@@ -1819,21 +1836,15 @@ void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
                     }
                     pImpl->keepaliveConsecutiveFailures.store(next);
                     if (next >= pImpl->keepaliveFailureThreshold.load()) {
-                        LOG_ERROR("Keepalive failure threshold reached ({}); closing transport", next);
-                        try {
-                            (void)pImpl->transport->Close();
-                        } catch (...) {
-                        }
+                        LOG_ERROR("Keepalive failure threshold reached ({})", next);
+                        try { (void)pImpl->transport->Close(); } catch (...) {}
                         if (pImpl->errorCallback) {
-                            try {
-                                pImpl->errorCallback("Keepalive failure threshold reached; closing transport");
-                            }
-                            catch (...) {
-                            }
+                            try { pImpl->errorCallback("Keepalive failure threshold reached; closing transport"); } catch (...) {}
                         }
                         break;
                     }
                 } else {
+                    // Success path: reset consecutive failures
                     pImpl->keepaliveConsecutiveFailures.store(0u);
                 }
             }

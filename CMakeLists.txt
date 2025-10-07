@@ -44,6 +44,7 @@ add_library(mcp_cpp STATIC
     src/mcp/JSONParser.cpp
     src/mcp/StdioTransport.cpp
     src/mcp/InMemoryTransport.cpp
+    src/mcp/SharedMemoryTransport.cpp
     src/mcp/HTTPTransport.cpp
     src/mcp/HTTPServer.cpp
     src/mcp/Client.cpp
@@ -81,7 +82,8 @@ target_include_directories(mcp_cpp PUBLIC ${BOOST_INCLUDE_DIR})
 target_compile_definitions(mcp_cpp PUBLIC
   BOOST_ERROR_CODE_HEADER_ONLY
   BOOST_SYSTEM_NO_DEPRECATED
-  BOOST_ASIO_NO_DEPRECATED)
+  BOOST_ASIO_NO_DEPRECATED
+  BOOST_DATE_TIME_NO_LIB)
 
 target_link_libraries(mcp_cpp PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 

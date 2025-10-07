@@ -47,8 +47,10 @@ int main() {
 
     // Prepare waitable completion and handler (fires on EOF or transport error)
     std::promise<void> stopped;
-    server->SetErrorHandler([&stopped](const std::string& err) {
+    server->SetErrorHandler([&stopped, &server](const std::string& err) {
         LOG_INFO("Server stopping: {}", err);
+        // Proactively stop the server/transport so the demo process exits promptly
+        try { (void)server->Stop().get(); } catch (...) {}
         try { stopped.set_value(); } catch (...) {}
     });
 

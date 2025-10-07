@@ -17,6 +17,7 @@
 #  ifdef __linux__
 #    include <sys/epoll.h>
 #    include <sys/eventfd.h>
+#    include <poll.h>
 #  else
 #    include <poll.h>
 #  endif
@@ -64,12 +65,18 @@ public:
     std::mutex requestMutex;
     std::mutex writeMutex; // protects writeQueue and queuedBytes
     std::condition_variable cvWrite;
+    std::condition_variable cvTimeout; // wakes timeout thread when deadlines change
+    // Exit signaling (avoid polling waits)
+    std::mutex exitMutex;
+    std::condition_variable cvReaderExit;
+    std::condition_variable cvWriterExit;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> requestDeadlines;
     std::atomic<unsigned int> requestCounter{0u};
 
 #ifdef _WIN32
     HANDLE stopEvent{NULL};
+    std::atomic<bool> useOverlappedWrite{true};
 #else
 #  ifdef __linux__
     int wakeEventFd{-1};
@@ -291,75 +298,341 @@ public:
         return body;
     }
 
+    // Extract one framed message from the rolling buffer if present; mutate buffer to remove consumed bytes
+    std::optional<std::string> extractFrame(std::string& buf) {
+        const std::string sep = "\r\n\r\n";
+        std::size_t headerEnd = buf.find(sep);
+        if (headerEnd == std::string::npos) {
+            return std::nullopt;
+        }
+
+        std::size_t pos = 0;
+        std::size_t contentLength = 0;
+        bool haveLength = false;
+        while (pos < headerEnd) {
+            std::size_t eol = buf.find("\r\n", pos);
+            if (eol == std::string::npos || eol > headerEnd) { break; }
+            std::string line = buf.substr(pos, eol - pos);
+            auto colon = line.find(':');
+            if (colon != std::string::npos) {
+                std::string name = line.substr(0, colon);
+                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
+                std::string value = line.substr(colon + 1);
+                value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch){ return !std::isspace(ch); }));
+                if (name == "content-length") {
+                    try {
+                        unsigned long long v64 = std::stoull(value);
+                        if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
+                            LOG_WARN("Content-Length {} exceeds limits (max={})", v64, MaxContentLength);
+                            if (errorHandler) { errorHandler("StdioTransport: body too large"); }
+                            buf.erase(0, headerEnd + sep.size());
+                            return std::nullopt;
+                        }
+                        contentLength = static_cast<std::size_t>(v64);
+                        haveLength = true;
+                    } catch (...) {
+                        LOG_WARN("Invalid Content-Length header: {}", value);
+                    }
+                }
+            }
+            pos = eol + 2;
+        }
+
+        if (!haveLength) {
+            LOG_WARN("Missing Content-Length header (dropping headers)");
+            buf.erase(0, headerEnd + sep.size());
+            return std::nullopt;
+        }
+
+        const std::size_t headerAndSep = headerEnd + sep.size();
+        if (contentLength > std::numeric_limits<std::size_t>::max() - headerAndSep) {
+            LOG_WARN("Frame size overflow detected (header={}, len={})", headerAndSep, contentLength);
+            buf.erase(0, headerEnd + sep.size());
+            return std::nullopt;
+        }
+        std::size_t frameTotal = headerAndSep + contentLength;
+        if (buf.size() < frameTotal) { return std::nullopt; }
+        std::string payload = buf.substr(headerEnd + sep.size(), contentLength);
+        buf.erase(0, frameTotal);
+        return payload;
+    }
+
+    void drainFrames(std::string& buffer) {
+        lastReadTs = std::chrono::steady_clock::now();
+        while (connected) {
+            auto framed = extractFrame(buffer);
+            if (!framed.has_value()) { break; }
+            processMessage(framed.value());
+        }
+    }
+
+#ifdef _WIN32
+    void readLoopWindows(std::string& buffer) {
+        constexpr int waitTimeoutMs = 100;
+        while (connected) {
+            HANDLE hIn = ::GetStdHandle(STD_INPUT_HANDLE);
+            if (!hIn || hIn == INVALID_HANDLE_VALUE) {
+                if (errorHandler) { errorHandler("StdioTransport: invalid STDIN handle"); }
+                break;
+            }
+            DWORD fileType = ::GetFileType(hIn);
+            std::vector<char> tmp(4096);
+            DWORD bytesRead = 0;
+            bool hadData = false;
+
+            if (fileType == FILE_TYPE_PIPE) {
+                DWORD available = 0;
+                if (!::PeekNamedPipe(hIn, NULL, 0, NULL, &available, NULL)) {
+                    DWORD err = ::GetLastError();
+                    LOG_ERROR("StdioTransport: PeekNamedPipe failed (err={})", static_cast<unsigned long>(err));
+                    if (errorHandler) { errorHandler("StdioTransport: PeekNamedPipe failed"); }
+                    break;
+                }
+                if (available == 0) {
+                    HANDLE handles[2] = { stopEvent, hIn };
+                    DWORD wr = ::WaitForMultipleObjects(2, handles, FALSE, waitTimeoutMs);
+                    if (wr == WAIT_TIMEOUT) {
+                    } else if (wr == (WAIT_OBJECT_0 + 1)) {
+                        (void)::PeekNamedPipe(hIn, NULL, 0, NULL, &available, NULL);
+                    } else if (wr == WAIT_OBJECT_0) {
+                        break;
+                    } else {
+                        DWORD err = ::GetLastError();
+                        LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
+                        if (errorHandler) { errorHandler("StdioTransport: WaitForMultipleObjects failed"); }
+                        break;
+                    }
+                }
+                if (available > 0) {
+                    DWORD toRead = available;
+                    if (toRead > static_cast<DWORD>(tmp.size())) { toRead = static_cast<DWORD>(tmp.size()); }
+                    if (!::ReadFile(hIn, tmp.data(), toRead, &bytesRead, NULL)) {
+                        DWORD err = ::GetLastError();
+                        if (err == ERROR_BROKEN_PIPE) {
+                            LOG_INFO("StdioTransport: EOF on pipe");
+                            if (errorHandler) { errorHandler("StdioTransport: EOF on pipe"); }
+                        } else {
+                            LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
+                            if (errorHandler) { errorHandler("StdioTransport: ReadFile failed"); }
+                        }
+                        break;
+                    }
+                    if (bytesRead == 0) {
+                        LOG_INFO("StdioTransport: EOF on pipe");
+                        if (errorHandler) { errorHandler("StdioTransport: EOF on pipe"); }
+                        break;
+                    }
+                    buffer.append(tmp.data(), tmp.data() + bytesRead);
+                    hadData = true;
+                }
+            } else {
+                HANDLE handles[2] = { stopEvent, hIn };
+                DWORD wr = ::WaitForMultipleObjects(2, handles, FALSE, waitTimeoutMs);
+                if (wr == (WAIT_OBJECT_0 + 1)) {
+                    if (!::ReadFile(hIn, tmp.data(), static_cast<DWORD>(tmp.size()), &bytesRead, NULL)) {
+                        DWORD err = ::GetLastError();
+                        if (err == ERROR_BROKEN_PIPE) {
+                            LOG_INFO("StdioTransport: EOF on stdin");
+                            if (errorHandler) { errorHandler("StdioTransport: EOF on stdin"); }
+                        } else {
+                            LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
+                            if (errorHandler) { errorHandler("StdioTransport: ReadFile failed"); }
+                        }
+                        break;
+                    }
+                    if (bytesRead == 0) {
+                        LOG_INFO("StdioTransport: EOF on stdin");
+                        if (errorHandler) { errorHandler("StdioTransport: EOF on stdin"); }
+                        break;
+                    }
+                    buffer.append(tmp.data(), tmp.data() + bytesRead);
+                    hadData = true;
+                } else if (wr == WAIT_OBJECT_0) {
+                    break;
+                } else if (wr != WAIT_TIMEOUT) {
+                    DWORD err = ::GetLastError();
+                    LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
+                    if (errorHandler) { errorHandler("StdioTransport: WaitForMultipleObjects failed"); }
+                    break;
+                }
+            }
+            
+            if (hadData) {
+                drainFrames(buffer);
+            }
+
+            if (idleReadTimeout.count() > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastReadTs >= idleReadTimeout) {
+                    LOG_ERROR("StdioTransport: idle read timeout ({} ms)", static_cast<long long>(idleReadTimeout.count()));
+                    if (errorHandler) { errorHandler("StdioTransport: idle read timeout"); }
+                    break;
+                }
+            }
+        }
+    }
+#elif defined(__linux__)
+    void readLoopLinux(std::string& buffer, int fd) {
+        constexpr int waitTimeoutMs = 100;
+        while (connected) {
+            bool hadData = false;
+            std::vector<char> tmp(4096);
+            ssize_t n = -1;
+            int ep = ::epoll_create1(EPOLL_CLOEXEC);
+            if (ep >= 0) {
+                epoll_event evIn{}; evIn.events = EPOLLIN | EPOLLRDHUP | EPOLLERR; evIn.data.fd = fd;
+                (void)::epoll_ctl(ep, EPOLL_CTL_ADD, fd, &evIn);
+                int wfd = wakeEventFd;
+                if (wfd >= 0) { epoll_event evWake{}; evWake.events = EPOLLIN; evWake.data.fd = wfd; (void)::epoll_ctl(ep, EPOLL_CTL_ADD, wfd, &evWake); }
+                epoll_event events[2];
+                const size_t eventsCapacity = sizeof(events) / sizeof(events[0]);
+                int rc = ::epoll_wait(ep, events, static_cast<int>(eventsCapacity), waitTimeoutMs);
+                ::close(ep);
+                if (rc < 0) {
+                    if (errno == EINTR) { continue; }
+                    LOG_ERROR("StdioTransport: epoll_wait failed (errno={} msg={})", errno, ::strerror(errno));
+                    if (errorHandler) { errorHandler("StdioTransport: epoll_wait failed"); }
+                    break;
+                }
+                if (rc > 0) {
+                    bool woke = false;
+                    const size_t limit = (static_cast<size_t>(rc) < eventsCapacity) ? static_cast<size_t>(rc) : eventsCapacity;
+                    for (size_t i = 0; i < limit; ++i) {
+                        auto &ev = events[i];
+                        if (ev.data.fd == fd) {
+                            if (ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+                                LOG_INFO("StdioTransport: stdin closed (epoll flags={})", static_cast<unsigned int>(ev.events));
+                                if (errorHandler) { errorHandler("StdioTransport: stdin closed"); }
+                                woke = true;
+                            } else if (ev.events & EPOLLIN) {
+                                n = ::read(fd, tmp.data(), tmp.size());
+                            }
+                        } else {
+                            woke = true;
+                            uint64_t v = 0; ssize_t r;
+                            do { r = ::read(ev.data.fd, &v, sizeof(v)); } while (r < 0 && errno == EINTR);
+                            if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { LOG_WARN("StdioTransport: wake event read failed (errno={} msg={})", errno, ::strerror(errno)); }
+                        }
+                    }
+                    if (woke && !connected) { break; }
+                }
+            } else {
+                // poll() fallback
+                int wfd = wakeEventFd;
+                struct pollfd pfds[2];
+                pfds[0].fd = fd; pfds[0].events = POLLIN | POLLERR | POLLHUP; pfds[0].revents = 0;
+                int nfds = 1;
+                if (wfd >= 0) { pfds[1].fd = wfd; pfds[1].events = POLLIN; pfds[1].revents = 0; nfds = 2; }
+                int rc = ::poll(pfds, nfds, waitTimeoutMs);
+                if (rc < 0) {
+                    if (errno == EINTR) { continue; }
+                    LOG_ERROR("StdioTransport: poll fallback failed (errno={} msg={})", errno, ::strerror(errno));
+                    if (errorHandler) { errorHandler("StdioTransport: poll fallback failed"); }
+                    break;
+                }
+                if (rc > 0) {
+                    if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+                        uint64_t v = 0; ssize_t r;
+                        do { r = ::read(wakeEventFd, &v, sizeof(v)); } while (r < 0 && errno == EINTR);
+                        if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { LOG_WARN("StdioTransport: eventfd drain failed (errno={} msg={})", errno, ::strerror(errno)); }
+                        if (!connected) { break; }
+                    }
+                    if (pfds[0].revents & (POLLERR | POLLHUP)) {
+                        LOG_INFO("StdioTransport: stdin closed (poll revents={})", static_cast<unsigned int>(pfds[0].revents));
+                        if (errorHandler) { errorHandler("StdioTransport: stdin closed"); }
+                        break;
+                    }
+                    if (pfds[0].revents & POLLIN) { n = ::read(fd, tmp.data(), tmp.size()); }
+                }
+            }
+            if (n > 0) { buffer.append(tmp.data(), tmp.data() + n); hadData = true; }
+            else if (n == 0) { LOG_INFO("StdioTransport: EOF on stdin"); if (errorHandler) { errorHandler("StdioTransport: EOF on stdin"); } break; }
+            else if (n < 0) {
+                if (errno != 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                    LOG_ERROR("StdioTransport: read error (errno={} msg={})", errno, ::strerror(errno));
+                    if (errorHandler) { errorHandler("StdioTransport: read error"); }
+                    break;
+                }
+            }
+            if (hadData) { drainFrames(buffer); }
+            if (idleReadTimeout.count() > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastReadTs >= idleReadTimeout) {
+                    LOG_ERROR("StdioTransport: idle read timeout ({} ms)", static_cast<long long>(idleReadTimeout.count()));
+                    if (errorHandler) { errorHandler("StdioTransport: idle read timeout"); }
+                    break;
+                }
+            }
+        }
+    }
+#else
+    void readLoopPosixPoll(std::string& buffer, int fd) {
+        constexpr int waitTimeoutMs = 100;
+        while (connected) {
+            bool hadData = false;
+            std::vector<char> tmp(4096);
+            int wfd = (wakePipe[0] >= 0) ? wakePipe[0] : -1;
+            struct pollfd pfds[2];
+            pfds[0].fd = fd; pfds[0].events = POLLIN | POLLERR | POLLHUP; pfds[0].revents = 0;
+            int nfds = 1;
+            if (wfd >= 0) { pfds[1].fd = wfd; pfds[1].events = POLLIN; pfds[1].revents = 0; nfds = 2; }
+            int rc = ::poll(pfds, nfds, waitTimeoutMs);
+            if (rc < 0) {
+                if (errno == EINTR) { continue; }
+                LOG_ERROR("StdioTransport: poll failed (errno={} msg={})", errno, ::strerror(errno));
+                if (errorHandler) { errorHandler("StdioTransport: poll failed"); }
+                break;
+            }
+            if (rc > 0) {
+                if (nfds == 2 && (pfds[1].revents & POLLIN)) {
+                    std::array<char, 64> b{};
+                    while (true) {
+                        ssize_t r; do { r = ::read(pfds[1].fd, b.data(), b.size()); } while (r < 0 && errno == EINTR);
+                        if (r > 0) { continue; }
+                        if (r == 0) { break; }
+                        if (r < 0) {
+                            if (errno == EAGAIN || errno == EWOULDBLOCK) { break; }
+                            LOG_WARN("StdioTransport: wake pipe read failed (errno={} msg={})", errno, ::strerror(errno));
+                            break;
+                        }
+                    }
+                    break;
+                }
+                if (pfds[0].revents & (POLLERR | POLLHUP)) {
+                    LOG_INFO("StdioTransport: stdin closed (poll revents={})", static_cast<unsigned int>(pfds[0].revents));
+                    if (errorHandler) { errorHandler("StdioTransport: stdin closed"); }
+                    break;
+                }
+                ssize_t n = ::read(fd, tmp.data(), tmp.size());
+                if (n > 0) { buffer.append(tmp.data(), tmp.data() + n); hadData = true; }
+                else if (n == 0) { LOG_INFO("StdioTransport: EOF on stdin"); if (errorHandler) { errorHandler("StdioTransport: EOF on stdin"); } break; }
+                else if (n < 0) {
+                    if (errno != 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+                        LOG_ERROR("StdioTransport: read error (errno={} msg={})", errno, ::strerror(errno));
+                        if (errorHandler) { errorHandler("StdioTransport: read error"); }
+                        break;
+                    }
+                }
+            }
+            if (hadData) { drainFrames(buffer); }
+            if (idleReadTimeout.count() > 0) {
+                auto now = std::chrono::steady_clock::now();
+                if (now - lastReadTs >= idleReadTimeout) {
+                    LOG_ERROR("StdioTransport: idle read timeout ({} ms)", static_cast<long long>(idleReadTimeout.count()));
+                    if (errorHandler) { errorHandler("StdioTransport: idle read timeout"); }
+                    break;
+                }
+            }
+        }
+    }
+#endif
+
     void startReader() {
         readerThread = std::thread([this]() {
             std::string buffer;
-            constexpr int waitTimeoutMs = 100;
             lastReadTs = std::chrono::steady_clock::now();
 
-            auto tryExtractFrame = [&](std::string& buf) -> std::optional<std::string> {
-                const std::string sep = "\r\n\r\n";
-                std::size_t headerEnd = buf.find(sep);
-                if (headerEnd == std::string::npos) {
-                    return std::nullopt;
-                }
-
-                std::size_t pos = 0;
-                std::size_t contentLength = 0;
-                bool haveLength = false;
-                while (pos < headerEnd) {
-                    std::size_t eol = buf.find("\r\n", pos);
-                    if (eol == std::string::npos || eol > headerEnd) {
-                        break;
-                    }
-                    std::string line = buf.substr(pos, eol - pos);
-                    auto colon = line.find(':');
-                    if (colon != std::string::npos) {
-                        std::string name = line.substr(0, colon);
-                        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                        std::string value = line.substr(colon + 1);
-                        value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch){ return !std::isspace(ch); }));
-                        if (name == "content-length") {
-                            try {
-                                unsigned long long v64 = std::stoull(value);
-                                if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
-                                    LOG_WARN("Content-Length {} exceeds limits (max={})", v64, MaxContentLength);
-                                    if (errorHandler) {
-                                        errorHandler("StdioTransport: body too large");
-                                    }
-                                    buf.erase(0, headerEnd + sep.size());
-                                    return std::nullopt;
-                                }
-                                contentLength = static_cast<std::size_t>(v64);
-                                haveLength = true;
-                            } catch (...) {
-                                LOG_WARN("Invalid Content-Length header: {}", value);
-                            }
-                        }
-                    }
-                    pos = eol + 2;
-                }
-
-                if (!haveLength) {
-                    LOG_WARN("Missing Content-Length header (dropping headers)");
-                    buf.erase(0, headerEnd + sep.size());
-                    return std::nullopt;
-                }
-
-                const std::size_t headerAndSep = headerEnd + sep.size();
-                if (contentLength > std::numeric_limits<std::size_t>::max() - headerAndSep) {
-                    LOG_WARN("Frame size overflow detected (header={}, len={})", headerAndSep, contentLength);
-                    buf.erase(0, headerEnd + sep.size());
-                    return std::nullopt;
-                }
-                std::size_t frameTotal = headerAndSep + contentLength;
-                if (buf.size() < frameTotal) {
-                    return std::nullopt;
-                }
-                std::string payload = buf.substr(headerEnd + sep.size(), contentLength);
-                buf.erase(0, frameTotal);
-                return payload;
-            };
+            // framing now handled by extractFrame()/drainFrames() helpers
 
 #ifndef _WIN32
             int fd = STDIN_FILENO;
@@ -373,269 +646,164 @@ public:
             }
 #endif
 
-            while (connected) {
 #ifdef _WIN32
-                HANDLE hIn = ::GetStdHandle(STD_INPUT_HANDLE);
-                if (!hIn || hIn == INVALID_HANDLE_VALUE) {
-                    if (errorHandler) {
-                        errorHandler("StdioTransport: invalid STDIN handle");
-                    }
-                    break;
-                }
-                DWORD fileType = ::GetFileType(hIn);
-                std::vector<char> tmp(4096);
-                DWORD bytesRead = 0;
-                bool hadData = false;
-
-                if (fileType == FILE_TYPE_PIPE) {
-                    DWORD available = 0;
-                    if (!::PeekNamedPipe(hIn, NULL, 0, NULL, &available, NULL)) {
-                        DWORD err = ::GetLastError();
-                        LOG_ERROR("StdioTransport: PeekNamedPipe failed (err={})", static_cast<unsigned long>(err));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: PeekNamedPipe failed");
-                        }
-                        break;
-                    }
-                    if (available == 0) {
-                        HANDLE handles[2] = { stopEvent, hIn };
-                        DWORD wr = ::WaitForMultipleObjects(2, handles, FALSE, waitTimeoutMs);
-                        if (wr == WAIT_TIMEOUT) {
-                        } else if (wr == (WAIT_OBJECT_0 + 1)) {
-                            (void)::PeekNamedPipe(hIn, NULL, 0, NULL, &available, NULL);
-                        } else if (wr == WAIT_OBJECT_0) {
-                            break;
-                        } else {
-                            DWORD err = ::GetLastError();
-                            LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: WaitForMultipleObjects failed");
-                            }
-                            break;
-                        }
-                    }
-                    if (available > 0) {
-                        DWORD toRead = available;
-                        if (toRead > static_cast<DWORD>(tmp.size())) {
-                            toRead = static_cast<DWORD>(tmp.size());
-                        }
-                        if (!::ReadFile(hIn, tmp.data(), toRead, &bytesRead, NULL)) {
-                            DWORD err = ::GetLastError();
-                            if (err == ERROR_BROKEN_PIPE) {
-                                LOG_INFO("StdioTransport: EOF on pipe");
-                                if (errorHandler) {
-                                    errorHandler("StdioTransport: EOF on pipe");
-                                }
-                            } else {
-                                LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
-                                if (errorHandler) {
-                                    errorHandler("StdioTransport: ReadFile failed");
-                                }
-                            }
-                            break;
-                        }
-                        if (bytesRead == 0) {
-                            LOG_INFO("StdioTransport: EOF on pipe");
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: EOF on pipe");
-                            }
-                            break;
-                        }
-                        buffer.append(tmp.data(), tmp.data() + bytesRead);
-                        hadData = true;
-                    }
-                } else {
-                    HANDLE handles[2] = { stopEvent, hIn };
-                    DWORD wr = ::WaitForMultipleObjects(2, handles, FALSE, waitTimeoutMs);
-                    if (wr == (WAIT_OBJECT_0 + 1)) {
-                        if (!::ReadFile(hIn, tmp.data(), static_cast<DWORD>(tmp.size()), &bytesRead, NULL)) {
-                            DWORD err = ::GetLastError();
-                            if (err == ERROR_BROKEN_PIPE) {
-                                LOG_INFO("StdioTransport: EOF on stdin");
-                                if (errorHandler) {
-                                    errorHandler("StdioTransport: EOF on stdin");
-                                }
-                            } else {
-                                LOG_ERROR("StdioTransport: ReadFile failed (err={})", static_cast<unsigned long>(err));
-                                if (errorHandler) {
-                                    errorHandler("StdioTransport: ReadFile failed");
-                                }
-                            }
-                            break;
-                        }
-                        if (bytesRead == 0) {
-                            LOG_INFO("StdioTransport: EOF on stdin");
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: EOF on stdin");
-                            }
-                            break;
-                        }
-                        buffer.append(tmp.data(), tmp.data() + bytesRead);
-                        hadData = true;
-                    } else if (wr == WAIT_OBJECT_0) {
-                        break;
-                    } else if (wr != WAIT_TIMEOUT) {
-                        DWORD err = ::GetLastError();
-                        LOG_ERROR("StdioTransport: WaitForMultipleObjects failed (err={})", static_cast<unsigned long>(err));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: WaitForMultipleObjects failed");
-                        }
-                        break;
-                    }
-                }
+            readLoopWindows(buffer);
+#elif defined(__linux__)
+            readLoopLinux(buffer, fd);
 #else
-                bool hadData = false;
-                std::vector<char> tmp(4096);
-                ssize_t n = -1;
-    #ifdef __linux__
-                int ep = ::epoll_create1(EPOLL_CLOEXEC);
-                if (ep >= 0) {
-                    epoll_event evIn{}; evIn.events = EPOLLIN | EPOLLRDHUP | EPOLLERR; evIn.data.fd = fd;
-                    (void)::epoll_ctl(ep, EPOLL_CTL_ADD, fd, &evIn);
-                    int wfd = wakeEventFd;
-                    if (wfd >= 0) {
-                        epoll_event evWake{}; evWake.events = EPOLLIN; evWake.data.fd = wfd;
-                        (void)::epoll_ctl(ep, EPOLL_CTL_ADD, wfd, &evWake);
-                    }
-                    epoll_event events[2];
-                    const size_t eventsCapacity = sizeof(events) / sizeof(events[0]);
-                    int rc = ::epoll_wait(ep, events, static_cast<int>(eventsCapacity), waitTimeoutMs);
-                    ::close(ep);
-                    if (rc < 0) {
-                        if (errno == EINTR) {
-                            continue;
-                        }
-                        LOG_ERROR("StdioTransport: epoll_wait failed (errno={} msg={})", errno, ::strerror(errno));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: epoll_wait failed");
-                        }
-                        break;
-                    }
-                    if (rc == 0) {
-                    } else {
-                        bool woke = false;
-                        const size_t limit = (static_cast<size_t>(rc) < eventsCapacity) ? static_cast<size_t>(rc) : eventsCapacity;
-                        for (size_t i = 0; i < limit; ++i) {
-                            auto &ev = events[i];
-                            if (ev.data.fd == fd) {
-                                if (ev.events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
-                                    LOG_INFO("StdioTransport: stdin closed (epoll flags={})", static_cast<unsigned int>(ev.events));
-                                    if (errorHandler) {
-                                        errorHandler("StdioTransport: stdin closed");
-                                    }
-                                    woke = true;
-                                } else if (ev.events & EPOLLIN) {
-                                    n = ::read(fd, tmp.data(), tmp.size());
-                                }
-                            } else {
-                                woke = true;
-                                uint64_t v = 0;
-                                ssize_t r;
-                                do {
-                                    r = ::read(ev.data.fd, &v, sizeof(v));
-                                } while (r < 0 && errno == EINTR);
-                                if (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                                    LOG_WARN("StdioTransport: wake event read failed (errno={} msg={})", errno, ::strerror(errno));
-                                }
-                            }
-                        }
-                        if (woke && !connected) {
-                            break;
-                        }
-                    }
-                } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeoutMs));
-                }
-    #else
-                int wfd = (wakePipe[0] >= 0) ? wakePipe[0] : -1;
-                struct pollfd pfds[2];
-                pfds[0].fd = fd; pfds[0].events = POLLIN | POLLERR | POLLHUP; pfds[0].revents = 0;
-                int nfds = 1;
-                if (wfd >= 0) { pfds[1].fd = wfd; pfds[1].events = POLLIN; pfds[1].revents = 0; nfds = 2; }
-                int rc = ::poll(pfds, nfds, waitTimeoutMs);
-                if (rc < 0) {
-                    if (errno == EINTR) {
-                        continue;
-                    }
-                    LOG_ERROR("StdioTransport: poll failed (errno={} msg={})", errno, ::strerror(errno));
-                    if (errorHandler) {
-                        errorHandler("StdioTransport: poll failed");
-                    }
-                    break;
-                }
-                if (rc > 0) {
-                    if (nfds == 2 && (pfds[1].revents & POLLIN)) {
-                        std::array<char, 64> b{};
-                        while (true) {
-                            ssize_t r;
-                            do { r = ::read(pfds[1].fd, b.data(), b.size()); } while (r < 0 && errno == EINTR);
-                            if (r > 0) { continue; }
-                            if (r == 0) { break; }
-                            if (r < 0) {
-                                if (errno == EAGAIN || errno == EWOULDBLOCK) { break; }
-                                LOG_WARN("StdioTransport: wake pipe read failed (errno={} msg={})", errno, ::strerror(errno));
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                    if (pfds[0].revents & (POLLERR | POLLHUP)) {
-                        LOG_INFO("StdioTransport: stdin closed (poll revents={})", static_cast<unsigned int>(pfds[0].revents));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: stdin closed");
-                        }
-                        break;
-                    }
-                    n = ::read(fd, tmp.data(), tmp.size());
-                }
-    #endif
-                if (n > 0) {
-                    buffer.append(tmp.data(), tmp.data() + n);
-                    hadData = true;
-                } else if (n == 0) {
-                    LOG_INFO("StdioTransport: EOF on stdin");
-                    if (errorHandler) {
-                        errorHandler("StdioTransport: EOF on stdin");
-                    }
-                    break;
-                } else if (n < 0) {
-                    if (errno != 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
-                        LOG_ERROR("StdioTransport: read error (errno={} msg={})", errno, ::strerror(errno));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: read error");
-                        }
-                        break;
-                    }
-                }
+            readLoopPosixPoll(buffer, fd);
 #endif
-
-                if (hadData) {
-                    lastReadTs = std::chrono::steady_clock::now();
-                    while (connected) {
-                        auto framed = tryExtractFrame(buffer);
-                        if (!framed.has_value()) {
-                            break;
-                        }
-                        processMessage(framed.value());
-                    }
-                }
-
-                // Idle read timeout check
-                if (idleReadTimeout.count() > 0) {
-                    auto now = std::chrono::steady_clock::now();
-                    if (now - lastReadTs >= idleReadTimeout) {
-                        LOG_ERROR("StdioTransport: idle read timeout ({} ms)", static_cast<long long>(idleReadTimeout.count()));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: idle read timeout");
-                        }
-                        break;
-                    }
-                }
-            }
             connected = false;
             readerExited.store(true);
+            cvReaderExit.notify_all();
         });
     }
+
+    // Dequeue next frame to write. Returns false when writer should exit.
+    bool dequeueNextFrame(std::string& frame) {
+        std::unique_lock<std::mutex> lk(writeMutex);
+        cvWrite.wait(lk, [&]{ return !connected || !writeQueue.empty(); });
+        if (!connected && writeQueue.empty()) {
+            return false;
+        }
+        if (!writeQueue.empty()) {
+            frame = std::move(writeQueue.front());
+            writeQueue.pop_front();
+        } else {
+            frame.clear();
+        }
+        return true;
+    }
+
+    void accountWritten(std::size_t frameSize) {
+        std::lock_guard<std::mutex> lk(writeMutex);
+        if (queuedBytes >= frameSize) { queuedBytes -= frameSize; }
+        else { queuedBytes = 0; }
+    }
+
+#ifdef _WIN32
+    bool writeChunkWindows(const std::string& frame, std::size_t& total, const std::chrono::steady_clock::time_point& start) {
+        DWORD written = 0;
+        HANDLE hOut = ::GetStdHandle(STD_OUTPUT_HANDLE);
+        if (!hOut || hOut == INVALID_HANDLE_VALUE) {
+            if (errorHandler) { errorHandler("StdioTransport: invalid STDOUT handle"); }
+            connected = false; return false;
+        }
+        if (useOverlappedWrite.load()) {
+            HANDLE hevt = ::CreateEventW(NULL, TRUE, FALSE, NULL);
+            if (!hevt) {
+                useOverlappedWrite.store(false);
+            } else {
+                OVERLAPPED ovl{}; ovl.hEvent = hevt;
+                BOOL ok = ::WriteFile(hOut, frame.data() + total, static_cast<DWORD>(frame.size() - total), &written, &ovl);
+                if (!ok) {
+                    DWORD err = ::GetLastError();
+                    if (err == ERROR_IO_PENDING) {
+                        for (;;) {
+                            int toMs = 50;
+                            if (writeTimeout.count() > 0) {
+                                auto elapsed = std::chrono::steady_clock::now() - start;
+                                auto remaining = writeTimeout - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+                                if (remaining.count() <= 0) {
+                                    LOG_ERROR("StdioTransport: write timeout ({} ms)", static_cast<long long>(writeTimeout.count()));
+                                    if (errorHandler) { errorHandler("StdioTransport: write timeout"); }
+                                    ::CancelIoEx(hOut, &ovl);
+                                    ::CloseHandle(hevt);
+                                    connected = false; return false;
+                                }
+                                toMs = static_cast<int>(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(50)).count());
+                            }
+                            DWORD wr = ::WaitForSingleObject(hevt, static_cast<DWORD>(toMs));
+                            if (wr == WAIT_OBJECT_0) {
+                                DWORD transferred = 0;
+                                if (!::GetOverlappedResult(hOut, &ovl, &transferred, FALSE)) {
+                                    DWORD e2 = ::GetLastError();
+                                    LOG_ERROR("StdioTransport: GetOverlappedResult failed (err={})", static_cast<unsigned long>(e2));
+                                    if (errorHandler) { errorHandler("StdioTransport: write failed"); }
+                                    ::CloseHandle(hevt);
+                                    connected = false; return false;
+                                }
+                                written = transferred; break;
+                            } else if (wr == WAIT_TIMEOUT) {
+                                continue; // re-evaluate remaining time
+                            } else {
+                                DWORD e2 = ::GetLastError();
+                                LOG_ERROR("StdioTransport: WaitForSingleObject failed (err={})", static_cast<unsigned long>(e2));
+                                if (errorHandler) { errorHandler("StdioTransport: write wait failed"); }
+                                ::CloseHandle(hevt);
+                                connected = false; return false;
+                            }
+                        }
+                    } else if (err == ERROR_INVALID_PARAMETER || err == ERROR_INVALID_HANDLE || err == ERROR_NOT_SUPPORTED) {
+                        useOverlappedWrite.store(false);
+                        ::CloseHandle(hevt);
+                        // Retry with synchronous path
+                        return writeChunkWindows(frame, total, start);
+                    } else {
+                        LOG_ERROR("StdioTransport: WriteFile(OVERLAPPED) failed (err={})", static_cast<unsigned long>(err));
+                        if (errorHandler) { errorHandler("StdioTransport: write failed"); }
+                        ::CloseHandle(hevt);
+                        connected = false; return false;
+                    }
+                }
+                ::CloseHandle(hevt);
+                total += static_cast<std::size_t>(written);
+                return true;
+            }
+        }
+        // synchronous fallback (no sleeps)
+        {
+            BOOL ok = ::WriteFile(hOut, frame.data() + total, static_cast<DWORD>(frame.size() - total), &written, NULL);
+            if (!ok) {
+                DWORD err = ::GetLastError();
+                LOG_ERROR("StdioTransport: WriteFile failed (err={})", static_cast<unsigned long>(err));
+                if (errorHandler) { errorHandler("StdioTransport: write failed"); }
+                connected = false; return false;
+            }
+            total += static_cast<std::size_t>(written);
+            return true;
+        }
+    }
+#else
+    bool writeChunkPosix(const std::string& frame, std::size_t& total, const std::chrono::steady_clock::time_point& start) {
+        ssize_t w = ::write(STDOUT_FILENO, frame.data() + total, frame.size() - total);
+        if (w > 0) {
+            total += static_cast<std::size_t>(w);
+            return true;
+        } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            int toMs = 50;
+            if (writeTimeout.count() > 0) {
+                auto elapsed = std::chrono::steady_clock::now() - start;
+                auto remaining = writeTimeout - std::chrono::duration_cast<std::chrono::milliseconds>(elapsed);
+                if (remaining.count() <= 0) {
+                    LOG_ERROR("StdioTransport: write timeout ({} ms)", static_cast<long long>(writeTimeout.count()));
+                    if (errorHandler) { errorHandler("StdioTransport: write timeout"); }
+                    connected = false; return false;
+                }
+                toMs = static_cast<int>(std::min<std::chrono::milliseconds>(remaining, std::chrono::milliseconds(50)).count());
+            }
+            struct pollfd pfd; pfd.fd = STDOUT_FILENO; pfd.events = POLLOUT; pfd.revents = 0;
+            int rc = ::poll(&pfd, 1, toMs);
+            if (rc < 0 && errno != EINTR) {
+                LOG_ERROR("StdioTransport: poll(stdout) failed (errno={} msg={})", errno, ::strerror(errno));
+                if (errorHandler) { errorHandler("StdioTransport: write wait failed"); }
+                connected = false; return false;
+            }
+            return true; // try write again
+        } else if (w < 0 && errno == EINTR) {
+            return true; // retry
+        } else if (w == 0) {
+            // Treat as temporarily unavailable: wait for POLLOUT
+            struct pollfd pfd; pfd.fd = STDOUT_FILENO; pfd.events = POLLOUT; pfd.revents = 0;
+            (void)::poll(&pfd, 1, 10);
+            return true; // retry
+        } else {
+            LOG_ERROR("StdioTransport: write error (errno={} msg={})", errno, ::strerror(errno));
+            if (errorHandler) { errorHandler("StdioTransport: write error"); }
+            connected = false; return false;
+        }
+    }
+#endif
 
     void startWriter() {
         writerThread = std::thread([this]() {
@@ -653,17 +821,7 @@ public:
 #endif
             while (connected) {
                 std::string frame;
-                {
-                    std::unique_lock<std::mutex> lk(writeMutex);
-                    cvWrite.wait_for(lk, std::chrono::milliseconds(50), [&]{ return !connected || !writeQueue.empty(); });
-                    if (!connected && writeQueue.empty()) {
-                        break;
-                    }
-                    if (!writeQueue.empty()) {
-                        frame = std::move(writeQueue.front());
-                        writeQueue.pop_front();
-                    }
-                }
+                if (!dequeueNextFrame(frame)) { break; }
                 if (frame.empty()) {
                     continue;
                 }
@@ -672,66 +830,15 @@ public:
                 auto start = std::chrono::steady_clock::now();
                 while (connected && total < frame.size()) {
 #ifdef _WIN32
-                    DWORD written = 0;
-                    HANDLE hOut = ::GetStdHandle(STD_OUTPUT_HANDLE);
-                    if (!hOut || hOut == INVALID_HANDLE_VALUE) {
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: invalid STDOUT handle");
-                        }
-                        connected = false; break;
-                    }
-                    BOOL ok = ::WriteFile(hOut, frame.data() + total, static_cast<DWORD>(frame.size() - total), &written, NULL);
-                    if (!ok) {
-                        DWORD err = ::GetLastError();
-                        LOG_ERROR("StdioTransport: WriteFile failed (err={})", static_cast<unsigned long>(err));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: write failed");
-                        }
-                        connected = false; break;
-                    }
-                    if (written == 0) {
-                        // Avoid tight loop
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    }
-                    total += static_cast<std::size_t>(written);
+                    if (!writeChunkWindows(frame, total, start)) { break; }
 #else
-                    ssize_t w = ::write(STDOUT_FILENO, frame.data() + total, frame.size() - total);
-                    if (w > 0) {
-                        total += static_cast<std::size_t>(w);
-                    } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-                        // Check write timeout
-                        if (writeTimeout.count() > 0 && (std::chrono::steady_clock::now() - start) >= writeTimeout) {
-                            LOG_ERROR("StdioTransport: write timeout ({} ms)", static_cast<long long>(writeTimeout.count()));
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: write timeout");
-                            }
-                            connected = false; break;
-                        }
-                        // Back off a bit
-                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                    } else if (w < 0 && errno == EINTR) {
-                        continue;
-                    } else if (w == 0) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    } else {
-                        LOG_ERROR("StdioTransport: write error (errno={} msg={})", errno, ::strerror(errno));
-                        if (errorHandler) {
-                            errorHandler("StdioTransport: write error");
-                        }
-                        connected = false; break;
-                    }
+                    if (!writeChunkPosix(frame, total, start)) { break; }
 #endif
                 }
-                {
-                    std::lock_guard<std::mutex> lk(writeMutex);
-                    if (queuedBytes >= frame.size()) {
-                        queuedBytes -= frame.size();
-                    } else {
-                        queuedBytes = 0;
-                    }
-                }
+                accountWritten(frame.size());
             }
             writerExited.store(true);
+            cvWriterExit.notify_all();
         });
     }
 
@@ -739,28 +846,41 @@ public:
         timeoutThread = std::thread([this]() {
             using clock = std::chrono::steady_clock;
             while (connected) {
-                std::vector<std::string> expired;
-                auto now = clock::now();
-                {
-                    std::lock_guard<std::mutex> lock(requestMutex);
+                std::unique_lock<std::mutex> lock(requestMutex);
+                if (requestDeadlines.empty()) {
+                    cvTimeout.wait(lock, [this](){ return !connected || !requestDeadlines.empty(); });
+                    if (!connected) { break; }
+                } else {
+                    // Find next deadline
+                    auto next = clock::time_point::max();
                     for (const auto& kv : requestDeadlines) {
-                        if (kv.second <= now) {
-                            expired.push_back(kv.first);
-                        }
+                        if (kv.second < next) { next = kv.second; }
                     }
-                    for (const auto& idStr : expired) {
-                        auto it = pendingRequests.find(idStr);
-                        if (it != pendingRequests.end()) {
-                            auto resp = std::make_unique<JSONRPCResponse>();
-                            resp->id = idStr;
-                            resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Request timeout", std::nullopt);
-                            it->second.set_value(std::move(resp));
-                            pendingRequests.erase(it);
-                        }
-                        requestDeadlines.erase(idStr);
+                    if (next == clock::time_point::max()) {
+                        cvTimeout.wait(lock, [this](){ return !connected || !requestDeadlines.empty(); });
+                        if (!connected) { break; }
+                    } else {
+                        cvTimeout.wait_until(lock, next, [this](){ return !connected; });
+                        if (!connected) { break; }
                     }
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                // Consume expired
+                std::vector<std::string> expired;
+                auto now = clock::now();
+                for (const auto& kv : requestDeadlines) {
+                    if (kv.second <= now) { expired.push_back(kv.first); }
+                }
+                for (const auto& idStr : expired) {
+                    auto it = pendingRequests.find(idStr);
+                    if (it != pendingRequests.end()) {
+                        auto resp = std::make_unique<JSONRPCResponse>();
+                        resp->id = idStr;
+                        resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Request timeout", std::nullopt);
+                        it->second.set_value(std::move(resp));
+                        pendingRequests.erase(it);
+                    }
+                    requestDeadlines.erase(idStr);
+                }
             }
         });
     }
@@ -846,6 +966,8 @@ std::future<void> StdioTransport::Close() {
     FUNC_SCOPE();
     LOG_INFO("Closing StdioTransport");
     pImpl->connected = false;
+    // Wake any waiting threads (reader/writer/timeout)
+    pImpl->cvTimeout.notify_all();
 #ifdef _WIN32
     if (pImpl->stopEvent) { ::SetEvent(pImpl->stopEvent); }
 #else
@@ -887,41 +1009,35 @@ std::future<void> StdioTransport::Close() {
     }
     #endif
 #endif
-#ifdef _WIN32
-    HANDLE hIn = ::GetStdHandle(STD_INPUT_HANDLE);
-    if (hIn && hIn != INVALID_HANDLE_VALUE) {
-        ::CloseHandle(hIn);
-    }
-    HANDLE hOut = ::GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut && hOut != INVALID_HANDLE_VALUE) {
-        ::CloseHandle(hOut);
-    }
-#else
-    ::close(STDIN_FILENO);
-    ::close(STDOUT_FILENO);
-#endif
+    // Do not close process-wide standard input/output handles here.
 
     if (pImpl->readerThread.joinable()) {
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (!pImpl->readerExited.load()) {
-            if (std::chrono::steady_clock::now() >= deadline) { break; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (std::this_thread::get_id() == pImpl->readerThread.get_id()) {
+            LOG_WARN("StdioTransport::Close called from reader thread; skipping join");
+        } else {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            {
+                std::unique_lock<std::mutex> lk(pImpl->exitMutex);
+                pImpl->cvReaderExit.wait_until(lk, deadline, [&]{ return pImpl->readerExited.load(); });
+            }
+            if (pImpl->readerExited.load()) { pImpl->readerThread.join(); }
+            else { LOG_WARN("StdioTransport: reader thread appears blocked; detaching to avoid hang"); pImpl->readerThread.detach(); }
         }
-        if (pImpl->readerExited.load()) { pImpl->readerThread.join(); }
-        else { LOG_WARN("StdioTransport: reader thread appears blocked; detaching to avoid hang"); pImpl->readerThread.detach(); }
     }
     if (pImpl->writerThread.joinable()) {
         // Wake writer
         pImpl->cvWrite.notify_all();
-        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (!pImpl->writerExited.load()) {
-            if (std::chrono::steady_clock::now() >= deadline) { break; }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (std::this_thread::get_id() == pImpl->writerThread.get_id()) {
+            LOG_WARN("StdioTransport::Close called from writer thread; skipping join");
+        } else {
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            {
+                std::unique_lock<std::mutex> lk(pImpl->exitMutex);
+                pImpl->cvWriterExit.wait_until(lk, deadline, [&]{ return pImpl->writerExited.load(); });
+            }
+            if (pImpl->writerExited.load()) { pImpl->writerThread.join(); }
+            else { LOG_WARN("StdioTransport: writer thread appears blocked; detaching to avoid hang"); pImpl->writerThread.detach(); }
         }
-        if (pImpl->writerExited.load()) {
-            pImpl->writerThread.join();
-        }
-        else { LOG_WARN("StdioTransport: writer thread appears blocked; detaching to avoid hang"); pImpl->writerThread.detach(); }
     }
     if (pImpl->timeoutThread.joinable()) {
         pImpl->timeoutThread.join();
@@ -938,6 +1054,7 @@ std::future<void> StdioTransport::Close() {
         pImpl->pendingRequests.clear();
         pImpl->requestDeadlines.clear();
     }
+    pImpl->cvTimeout.notify_all();
 
     std::promise<void> promise; promise.set_value(); return promise.get_future();
 }
@@ -979,6 +1096,7 @@ std::future<std::unique_ptr<JSONRPCResponse>> StdioTransport::SendRequest(
         pImpl->pendingRequests[requestId] = std::move(promise);
         pImpl->requestDeadlines[requestId] = std::chrono::steady_clock::now() + pImpl->requestTimeout;
     }
+    pImpl->cvTimeout.notify_all();
 
     std::string serialized = request->Serialize();
     LOG_DEBUG("Sending framed request ({} bytes)", serialized.size());
@@ -999,9 +1117,17 @@ std::future<void> StdioTransport::SendNotification(
     std::promise<void> promise; promise.set_value(); return promise.get_future();
 }
 
-void StdioTransport::SetNotificationHandler(NotificationHandler handler) { FUNC_SCOPE(); pImpl->notificationHandler = std::move(handler); }
-void StdioTransport::SetRequestHandler(RequestHandler handler) { FUNC_SCOPE(); pImpl->requestHandler = std::move(handler); }
-void StdioTransport::SetErrorHandler(ErrorHandler handler) { FUNC_SCOPE(); pImpl->errorHandler = std::move(handler); }
+void StdioTransport::SetNotificationHandler(NotificationHandler handler) { 
+    FUNC_SCOPE(); pImpl->notificationHandler = std::move(handler);
+}
+
+void StdioTransport::SetRequestHandler(RequestHandler handler) { 
+    FUNC_SCOPE(); pImpl->requestHandler = std::move(handler);
+}
+
+void StdioTransport::SetErrorHandler(ErrorHandler handler) {
+    FUNC_SCOPE(); pImpl->errorHandler = std::move(handler); 
+}
 
 void StdioTransport::SetRequestTimeoutMs(uint64_t timeoutMs) {
     FUNC_SCOPE();

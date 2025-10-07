@@ -61,6 +61,7 @@ add_executable(mcp_tests
   test_validation_prompts.cpp
   test_validation_sampling.cpp
   test_validation_strict.cpp
+  test_shared_memory_transport.cpp
   )
 
 target_link_libraries(mcp_tests
@@ -76,30 +77,37 @@ target_include_directories(mcp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../incl
 include(GoogleTest)
 gtest_discover_tests(mcp_tests)
 
-# Stdio transport integration test: run demo wiring server<->client over FIFOs
-add_test(
-  NAME StdioDemo.Run
-  COMMAND /bin/bash -lc "MCP_STDIO_MODE=1 SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${CMAKE_SOURCE_DIR}/scripts/run_demo.sh"
-)
+set(RUN_DEMO_SH "${CMAKE_SOURCE_DIR}/scripts/run_demo.sh")
+set(STDIO_HARDENING_SH "${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh")
 
-# Stdio hardening negative scenarios
-add_test(
-  NAME StdioHardening.IdleReadTimeout
-  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh idle"
-)
-add_test(
-  NAME StdioHardening.WriteQueueOverflow
-  # Reduce DEBUG noise in CI: lots of framed notification debug lines during overflow scenarios
-  # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
-  COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh overflow"
-)
-add_test(
-  NAME StdioHardening.WriteTimeout
-  # Reduce DEBUG noise in CI: many DEBUG messages when writes stall without a reader.
-  # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
-  COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh writetimeout"
-)
-add_test(
-  NAME StdioHardening.BadContentLength
-  COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh badlength"
-)
+if (EXISTS "${RUN_DEMO_SH}" AND EXISTS "${STDIO_HARDENING_SH}")
+  # Stdio transport integration test: run demo wiring server<->client over FIFOs
+  add_test(
+    NAME StdioDemo.Run
+    COMMAND /bin/bash -lc "MCP_STDIO_MODE=1 SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
+  )
+
+  # Stdio hardening negative scenarios
+  add_test(
+    NAME StdioHardening.IdleReadTimeout
+    COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${STDIO_HARDENING_SH} idle"
+  )
+  add_test(
+    NAME StdioHardening.WriteQueueOverflow
+    # Reduce DEBUG noise in CI: lots of framed notification debug lines during overflow scenarios
+    # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
+    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${STDIO_HARDENING_SH} overflow"
+  )
+  add_test(
+    NAME StdioHardening.WriteTimeout
+    # Reduce DEBUG noise in CI: many DEBUG messages when writes stall without a reader.
+    # We set MCP_LOG_LEVEL=INFO so logs are still visible but less verbose.
+    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${STDIO_HARDENING_SH} writetimeout"
+  )
+  add_test(
+    NAME StdioHardening.BadContentLength
+    COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${STDIO_HARDENING_SH} badlength"
+  )
+else()
+  message(STATUS "Scripts not found; skipping stdio integration/hardening script-based tests")
+endif()
