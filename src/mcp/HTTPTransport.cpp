@@ -331,4 +331,74 @@ void HTTPTransport::SetErrorHandler(ErrorHandler handler) {
     pImpl->errorHandler = std::move(handler);
 }
 
+//==========================================================================================================
+// HTTPTransportFactory::CreateTransport
+// Purpose: Parse semicolon-delimited key=value config into Options and create transport.
+//==========================================================================================================
+std::unique_ptr<mcp::ITransport> mcp::HTTPTransportFactory::CreateTransport(const std::string& config) {
+    HTTPTransport::Options opts;
+    auto trim = [](std::string s) -> std::string {
+        std::size_t b = 0, e = s.size();
+        while (b < e && (s[b] == ' ' || s[b] == '\t')) {
+            ++b;
+        }
+        while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) {
+            --e;
+        }
+        return s.substr(b, e - b);
+    };
+
+    if (!config.empty()) {
+        std::size_t start = 0;
+        while (start < config.size()) {
+            std::size_t sep = config.find(';', start);
+            if (sep == std::string::npos) { sep = config.size(); }
+            std::string kv = trim(config.substr(start, sep - start));
+            if (!kv.empty()) {
+                std::size_t eq = kv.find('=');
+                if (eq != std::string::npos) {
+                    std::string key = trim(kv.substr(0, eq));
+                    std::string val = trim(kv.substr(eq + 1));
+                    if (key == "scheme") {
+                        opts.scheme = val;
+                    }
+                    else if (key == "host") {
+                        opts.host = val;
+                    }
+                    else if (key == "port") {
+                        opts.port = val;
+                    }
+                    else if (key == "rpcPath") {
+                        opts.rpcPath = val;
+                    }
+                    else if (key == "notifyPath") {
+                        opts.notifyPath = val;
+                    }
+                    else if (key == "serverName") {
+                        opts.serverName = val;
+                    }
+                    else if (key == "caFile") {
+                        opts.caFile = val;
+                    }
+                    else if (key == "caPath") {
+                        opts.caPath = val;
+                    }
+                    else if (key == "connectTimeoutMs") {
+                        try {
+                            opts.connectTimeoutMs = static_cast<unsigned int>(std::stoul(val));
+                        } catch (...) {}
+                    }
+                    else if (key == "readTimeoutMs") {
+                        try {
+                            opts.readTimeoutMs = static_cast<unsigned int>(std::stoul(val));
+                        } catch (...) {}
+                    }
+                }
+            }
+            start = sep + 1;
+        }
+    }
+    return std::make_unique<HTTPTransport>(opts);
+}
+
 } // namespace mcp

@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+#==========================================================================================================
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Vinny Parla
+# File: ci_all.sh
+# Purpose: End-to-end CI driver: builds test image, runs CTest, builds/runs HTTPS e2e
+#==========================================================================================================
 set -euo pipefail
 
 # End-to-end CI script: build unit/integration tests and run HTTPS e2e
@@ -23,16 +29,21 @@ mkdir -p .ci
 docker save mcp-cpp-build:latest -o .ci/mcp-cpp-build.tar
 
 echo "[ci_all] 1b/3 List discovered unit/integration tests"
+# NOTE: Shared-memory transport (Boost.Interprocess message_queue) relies on POSIX mqueues.
+# Use host IPC to expose the host's /dev/mqueue inside the container without special mounts.
 docker run --rm \
   -e GTEST_COLOR=yes \
   -e CTEST_OUTPUT_ON_FAILURE=1 \
+  --ipc=host \
   mcp-cpp-build \
   ctest --test-dir build -N -V
 
 echo "[ci_all] 1c/3 Run unit/integration tests verbosely"
+# Use host IPC for SHM transport tests; avoids mount issues on Docker Desktop/WSL
 docker run --rm \
   -e GTEST_COLOR=yes \
   -e CTEST_OUTPUT_ON_FAILURE=1 \
+  --ipc=host \
   mcp-cpp-build \
   ctest --test-dir build -VV --progress
 

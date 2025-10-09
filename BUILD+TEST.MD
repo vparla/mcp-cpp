@@ -129,6 +129,42 @@ wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src &&
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ClientCache --output-on-failure'"
 ```
 
+#### Shared-memory transport in Docker (host IPC recommended)
+
+`SharedMemoryTransport` uses Boost.Interprocess `message_queue` (POSIX mqueues). The most portable way to expose mqueues inside Docker is to use the host IPC namespace.
+
+- Recommended: host IPC (no special mounts, non‑privileged)
+
+  - Linux/macOS (native):
+  ```bash
+  docker run --rm -t \
+    --ipc=host \
+    mcp-cpp-build \
+    bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'
+  ```
+
+  - Windows (PowerShell via WSL2 Ubuntu):
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -t --ipc=host mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'"
+  ```
+
+- Alternatives (if host IPC isn’t available):
+  - Mount mqueue explicitly (works on many native Linux setups):
+    ```bash
+    docker run --rm -t \
+      --mount type=mqueue,target=/dev/mqueue \
+      mcp-cpp-build \
+      bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'
+    ```
+  - Privileged container and mount inside (least preferred):
+    ```powershell
+    wsl -d Ubuntu -- bash -lc "docker run --rm -t --privileged mcp-cpp-build bash -lc 'mount -t mqueue none /dev/mqueue 2>/dev/null || true; cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'"
+    ```
+
+Notes:
+- Docker build stages cannot mount host devices. The `--target test` step in `Dockerfile.demo` cannot mount `/dev/mqueue`. Use the runtime commands above to run SHM‑dependent demos/tests, or skip them during build‑time testing.
+- The ALL script `scripts/ci_all.sh` now runs tests with `--ipc=host`.
+
 - Re-run only failed tests from the last run:
 ```powershell
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build --rerun-failed --output-on-failure'"
@@ -324,7 +360,7 @@ We write tests with GoogleTest, and CTest (from CMake) discovers and runs them i
 - __ServerSampling.HandlesCreateMessageRequest__ — server handles sampling/createMessage with a registered handler. Source: [tests/test_sampling_handler.cpp](c:/Work/mcp-cpp/tests/test_sampling_handler.cpp)
 - __ResourceSubscriptions.FiltersUpdatesByUri__ — server filters resources/updated notifications by subscribed URIs. Source: [tests/test_resource_subscriptions.cpp](c:/Work/mcp-cpp/tests/test_resource_subscriptions.cpp)
 - __ClientSubscribeUri.SubAndFilterByUri__ — client API per-URI subscription and filtered notifications. Source: [tests/test_client_subscribe_uri.cpp](c:/Work/mcp-cpp/tests/test_client_subscribe_uri.cpp)
-- __StdioDemo.Run__ — demo integration using stdio transport; builds and runs the example server and client, wiring them via FIFOs. Configurable via `MCP_STDIOTRANSPORT_TIMEOUT_MS`. Defined in [tests/CMakeLists.txt](c:/Work/mcp-cpp/tests/CMakeLists.txt) and script [scripts/run_demo.sh](c:/Work/mcp-cpp/scripts/run_demo.sh)
+- __TransportDemo.Run__ — demo integration that exercises stdio, shared-memory, and HTTP transports; builds and runs the example server and client. Configurable via `MCP_STDIOTRANSPORT_TIMEOUT_MS`. Defined in [tests/CMakeLists.txt](c:/Work/mcp-cpp/tests/CMakeLists.txt) and script [scripts/run_demo.sh](c:/Work/mcp-cpp/scripts/run_demo.sh)
 
 - __StdioHardening.IdleReadTimeout__ — verifies idle read timeout closes transport when no bytes are received for the configured duration. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
 - __StdioHardening.WriteQueueOverflow__ — small write queue with frequent keepalives triggers overflow; transport emits error and closes. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
@@ -359,7 +395,7 @@ wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src &&
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ServerResourceTemplates.ListRoundTrip --output-on-failure'"
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R PromptsGet.ReturnsActualMessages --output-on-failure'"
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ServerToolsInputSchema.ListIncludesProvidedSchema --output-on-failure'"
-wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R StdioDemo.Run --output-on-failure'"
+wsl -d Ubuntu -- bash -lc "docker run --rm -t --mount type=mqueue,target=/dev/mqueue mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'"
 ```
 
 Run only stdio hardening tests (WSL):
@@ -407,10 +443,24 @@ docker run --rm --name mcp-cpp-demo \
   --mount type=bind,src=$(pwd),dst=/work mcp-cpp-demo
 ```
 
+To enable the Shared-memory transport demo inside the container, mount `/dev/mqueue`:
+
+```bash
+docker run --rm --name mcp-cpp-demo \
+  --mount type=mqueue,target=/dev/mqueue \
+  mcp-cpp-demo
+```
+
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
 wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
 wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo -e MCP_STDIOTRANSPORT_TIMEOUT_MS=2000 --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
+```
+
+To enable the Shared-memory transport demo on Windows (WSL), add the mqueue mount:
+
+```powershell
+wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=mqueue,target=/dev/mqueue mcp-cpp-demo"
 ```
 
 Troubleshooting:

@@ -23,10 +23,12 @@ COPY . .
 
 # Configure and build (Release + tests)
 # Show Ninja progress and limit parallelism to reduce resource contention inside Docker
+
+
 ENV NINJA_STATUS="[%f/%t %o/sec %es] "
 ENV CMAKE_BUILD_PARALLEL_LEVEL=6
-RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMCP_BUILD_TESTS=ON \
- && cmake --build build -j -- -v
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DMCP_BUILD_TESTS=ON -DCMAKE_VERBOSE_MAKEFILE=ON -DCMAKE_CXX_FLAGS="-v" -DCMAKE_C_FLAGS="-v" \
+ && cmake --build build --verbose -j -- -v -d explain | tee build.log
 
 # 1b) Test stage: run unit tests inside the build environment
 FROM build AS test
@@ -37,6 +39,18 @@ ENV CTEST_OUTPUT_ON_FAILURE=1
 WORKDIR /src
 # Set a per-test timeout to avoid indefinite hangs and show verbose progress
 ENV CTEST_PARALLEL_LEVEL=4
+# NOTE: Shared-memory transport (Boost.Interprocess message_queue) uses POSIX mqueues.
+# Recommended: run with host IPC so the container sees the host's /dev/mqueue:
+#   docker run --rm -t \
+#     --ipc=host \
+#     mcp-cpp-build \
+#     bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'
+# Alternatively, mount mqueue explicitly if supported:
+#   docker run --rm -t \
+#     --mount type=mqueue,target=/dev/mqueue \
+#     mcp-cpp-build \
+#     bash -lc 'cd /src && ctest --test-dir build -R TransportDemo.Run -VV --output-on-failure'
+# Docker build stages cannot mount host devices; SHM demos may fail here without a host-IPC setup.
 RUN ctest --test-dir build -VV --progress --timeout 180
 
 # 2) Demo runtime stage
@@ -52,6 +66,10 @@ RUN apt-get update \
 
 # Route logs to stderr to avoid corrupting stdio JSON-RPC frames
 ENV MCP_STDIO_MODE=1
+# To enable the Shared-memory transport demo inside this container, prefer host IPC:
+#   docker run --rm -t --ipc=host mcp-cpp-demo
+# Alternatively, mount POSIX mqueue explicitly:
+#   docker run --rm -t --mount type=mqueue,target=/dev/mqueue mcp-cpp-demo
 
 # Binaries
 COPY --from=build /src/build/examples/mcp_server/mcp_server /usr/local/bin/mcp_server

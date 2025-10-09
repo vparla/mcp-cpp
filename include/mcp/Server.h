@@ -79,6 +79,18 @@ public:
     //==========================================================================================================
     virtual bool IsRunning() const = 0;
 
+    //==========================================================================================================
+    // HandleJSONRPC
+    // Purpose: Bridges a raw JSON-RPC request to the server's dispatcher. Useful to wire an
+    //          ITransportAcceptor (e.g., HTTPServer) directly to the Server instance without
+    //          an intermediate ITransport. Returns a fully formed JSONRPCResponse (error or result).
+    // Args:
+    //   request: Parsed JSON-RPC request object.
+    // Returns:
+    //   unique_ptr<JSONRPCResponse> with result or error populated.
+    //==========================================================================================================
+    virtual std::unique_ptr<JSONRPCResponse> HandleJSONRPC(const JSONRPCRequest& request) = 0;
+
     ////////////////////////////////////////// Protocol initialization /////////////////////////////////////////
     //==========================================================================================================
     // Handles the MCP initialize request from the client.
@@ -470,6 +482,9 @@ public:
     std::future<void> Start(std::unique_ptr<ITransport> transport) override;
     std::future<void> Stop() override;
     bool IsRunning() const override;
+
+    // Bridge raw JSON-RPC requests to the server dispatcher (for acceptor-based servers)
+    std::unique_ptr<JSONRPCResponse> HandleJSONRPC(const JSONRPCRequest& request) override;
 
     std::future<void> HandleInitialize(
         const Implementation& clientInfo,

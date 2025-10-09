@@ -10,7 +10,6 @@ cd "$repo_root"
 echo "[http_build] Building mcp-http image using local base 'mcp-cpp-build'..."
 docker build \
   -f tests/http/Dockerfile \
-  --pull \
   --build-arg BUILD_IMAGE=mcp-cpp-build \
   -t mcp-http \
   .

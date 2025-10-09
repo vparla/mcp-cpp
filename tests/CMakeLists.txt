@@ -34,7 +34,6 @@ add_executable(mcp_tests
   test_resource_read_chunking_overload.cpp
   test_acceptor_interface.cpp
   test_acceptor_factory.cpp
-  # Additional tests
   test_cancellation.cpp
   test_capabilities_logging.cpp
   test_client_cache.cpp
@@ -54,6 +53,7 @@ add_executable(mcp_tests
   test_sampling_typed_helpers.cpp
   test_server_initiated_sampling.cpp
   test_server_logging.cpp
+  test_handle_jsonrpc.cpp
   test_typed_cancellation.cpp
   test_validation_lists.cpp
   test_validation_mode.cpp
@@ -83,7 +83,7 @@ set(STDIO_HARDENING_SH "${CMAKE_SOURCE_DIR}/scripts/test_stdio_hardening.sh")
 if (EXISTS "${RUN_DEMO_SH}" AND EXISTS "${STDIO_HARDENING_SH}")
   # Stdio transport integration test: run demo wiring server<->client over FIFOs
   add_test(
-    NAME StdioDemo.Run
+    NAME TransportDemo.Run
     COMMAND /bin/bash -lc "MCP_STDIO_MODE=1 SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
   )
 

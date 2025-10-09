@@ -928,7 +928,10 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
 
         if (req.method == Methods::Initialize) {
             auto resp = this->handleInitialize(req);
-            this->sendInitializedAndListChangedAsync();
+            // Only send notifications when a transport is present and connected
+            if (this->transport && this->transport->IsConnected()) {
+                this->sendInitializedAndListChangedAsync();
+            }
             return resp;
         } else if (req.method == Methods::ListTools) {
             return this->handleToolsList(req);
@@ -1538,6 +1541,14 @@ bool Server::IsRunning() const {
         val = val && pImpl->transport->IsConnected();
     }
     return val;
+}
+
+std::unique_ptr<JSONRPCResponse> Server::HandleJSONRPC(const JSONRPCRequest& request) {
+    FUNC_SCOPE();
+    // Bridge raw JSON-RPC request to the internal dispatcher. This path is used when the server is
+    // wired behind an ITransportAcceptor (e.g., HTTPServer) instead of owning an ITransport.
+    // Note: Initialized/list_changed notifications are only emitted when a transport is present.
+    return pImpl->dispatchRequest(request);
 }
 
 std::future<void> Server::HandleInitialize(

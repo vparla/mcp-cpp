@@ -92,6 +92,29 @@ Initialize semantics:
 - The public `Server::HandleInitialize(...)` helper does not send list-changed notifications. It only records client capabilities for non-JSON-RPC wiring scenarios. In normal JSON-RPC flows you do not need to call it.
 - Tests assert exactly one list-changed notification per category after initialize. See [tests/test_initialize_notifications.cpp](../../tests/test_initialize_notifications.cpp).
 
+### Bridging requests from an acceptor (HTTPServer)
+
+When running a server behind an `ITransportAcceptor` (e.g., `HTTPServer`), you can bridge incoming JSON-RPC requests directly into the server's dispatcher using `Server::HandleJSONRPC(...)`:
+
+```cpp
+#include "mcp/Server.h"
+#include "mcp/HTTPServer.hpp"
+
+mcp::ServerFactory sf;
+auto server = sf.CreateServer({"Demo","1.0.0"});
+
+mcp::HTTPServerFactory hf;
+auto acceptor = hf.CreateTransportAcceptor("http://127.0.0.1:9443");
+acceptor->SetRequestHandler([&server](const mcp::JSONRPCRequest& req){
+  return server->HandleJSONRPC(req);
+});
+acceptor->Start().get();
+```
+
+Notes:
+
+- The server will only emit `notifications/initialized` and list-changed notifications when it owns a connected `ITransport`. In the acceptor-bridged mode, notifications are not sent automatically; callers should coordinate any desired notifications at a higher level.
+
 ### Capability advertisement
 
 - The server advertises formal capabilities in the initialize result under the `capabilities` object. In addition to `tools`, `resources`, `prompts`, and `sampling`, the server now also advertises a `logging` capability to indicate support for `notifications/log`.

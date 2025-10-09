@@ -13,6 +13,9 @@ Header: [include/mcp/Transport.h](../../include/mcp/Transport.h)
 Transports provide JSON-RPC message delivery and connection lifecycle. Concrete implementations:
 - In-memory: [include/mcp/InMemoryTransport.hpp](../../include/mcp/InMemoryTransport.hpp)
 - Stdio: [include/mcp/StdioTransport.hpp](../../include/mcp/StdioTransport.hpp)
+- Shared memory: [include/mcp/SharedMemoryTransport.hpp](../../include/mcp/SharedMemoryTransport.hpp)
+- HTTP/HTTPS client: [include/mcp/HTTPTransport.hpp](../../include/mcp/HTTPTransport.hpp)
+- HTTP/HTTPS server acceptor: [include/mcp/HTTPServer.hpp](../../include/mcp/HTTPServer.hpp)
 
 ## ITransport
 - std::future<void> Start()
@@ -45,6 +48,8 @@ Transports provide JSON-RPC message delivery and connection lifecycle. Concrete 
 - std::unique_ptr<ITransport> CreateTransport(const std::string& config)
   - Creates a transport instance (e.g., stdio config). See concrete factory headers for parameters.
 
+## Transport types and factory usage
+
 ### StdioTransport factory and configuration
 
 Header: [include/mcp/StdioTransport.hpp](../../include/mcp/StdioTransport.hpp)
@@ -72,10 +77,128 @@ Programmatic setters are also available on `StdioTransport`:
 - `SetWriteTimeoutMs(uint64_t ms)`
 - `SetWriteQueueMaxBytes(std::size_t bytes)`
 
+### InMemoryTransport factory
+
+Header: [include/mcp/InMemoryTransport.hpp](../../include/mcp/InMemoryTransport.hpp)
+
+The in-memory transport is primarily for tests and in-process demos. It supports creating paired endpoints or a single endpoint via the factory.
+
+Examples:
+
+```cpp
+#include "mcp/InMemoryTransport.hpp"
+
+// Paired endpoints (test/demo)
+auto pair = mcp::InMemoryTransport::CreatePair();
+auto client = std::move(pair.first);
+auto server = std::move(pair.second);
+(void)client->Start().get();
+(void)server->Start().get();
+
+// Factory-created single endpoint
+mcp::InMemoryTransportFactory f;
+auto t = f.CreateTransport(""); // no config required
+```
+
+### SharedMemoryTransport factory and configuration
+
+Header: [include/mcp/SharedMemoryTransport.hpp](../../include/mcp/SharedMemoryTransport.hpp)
+
+The shared-memory transport enables cross-process JSON-RPC using Boost.Interprocess queues. Two queues are created per channel: `<channel>_c2s` and `<channel>_s2c`.
+
+Config formats:
+
+- `shm://<channelName>?create=true&maxSize=<bytes>&maxCount=<n>` (creator/server side)
+- `<channelName>` (peer/client side; `create=false` by default)
+
+Examples:
+
+```cpp
+#include "mcp/SharedMemoryTransport.hpp"
+
+// Server side (creator)
+mcp::SharedMemoryTransportFactory f;
+auto serverT = f.CreateTransport("shm://mcp-shm?create=true&maxSize=65536&maxCount=64");
+
+// Client side
+auto clientT = f.CreateTransport("mcp-shm");
+```
+
+### HTTP/HTTPS client transport factory
+
+Header: [include/mcp/HTTPTransport.hpp](../../include/mcp/HTTPTransport.hpp)
+
+Factory config is a `;`-separated `key=value` list. Recognized keys: `scheme`, `host`, `port`, `rpcPath`, `notifyPath`, `serverName`, `caFile`, `caPath`.
+
+Example:
+
+```cpp
+#include "mcp/HTTPTransport.hpp"
+
+mcp::HTTPTransportFactory f;
+auto t = f.CreateTransport("scheme=http; host=127.0.0.1; port=9443; rpcPath=/mcp/rpc; notifyPath=/mcp/notify; serverName=127.0.0.1");
+```
+
+## ITransportAcceptor (server-side acceptors)
+
+Header: [include/mcp/Transport.h](../../include/mcp/Transport.h) (ITransportAcceptor) and [include/mcp/HTTPServer.hpp](../../include/mcp/HTTPServer.hpp)
+
+Use an acceptor to run a server that receives JSON-RPC over HTTP/HTTPS. The acceptor invokes server-provided handlers directly.
+
+### HTTPServerFactory and configuration
+
+Header: [include/mcp/HTTPServer.hpp](../../include/mcp/HTTPServer.hpp)
+
+- Config is a URL-like string with optional query parameters:
+  - `http://<host>[:port]`
+  - `https://<host>[:port]?cert=<path>&key=<path>`
+  - Default port: 9443
+
+Example server wiring using `Server::HandleJSONRPC(...)` bridge:
+
+```cpp
+#include "mcp/HTTPServer.hpp"
+#include "mcp/Server.h"
+
+mcp::ServerFactory sf;
+auto server = sf.CreateServer({"Demo","1.0.0"});
+
+mcp::HTTPServerFactory hf;
+auto acceptor = hf.CreateTransportAcceptor("http://127.0.0.1:9443");
+acceptor->SetRequestHandler([&server](const mcp::JSONRPCRequest& req){
+  return server->HandleJSONRPC(req);
+});
+acceptor->SetNotificationHandler([](std::unique_ptr<mcp::JSONRPCNotification> note){ /* optional */ });
+acceptor->SetErrorHandler([](const std::string& err){ /* log */ });
+acceptor->Start().get();
+```
 ### Environment variables
 
 - `MCP_STDIOTRANSPORT_TIMEOUT_MS` — default request timeout in milliseconds. See usage in [src/mcp/StdioTransport.cpp](../../src/mcp/StdioTransport.cpp).
 - `MCP_STDIO_CONFIG` — demo/server env to pass the same `key=value` list as the factory config. See examples in [BUILD+TEST.MD](../../BUILD+TEST.MD#demo-and-transport-options-env--factory-config).
+
+## Demo CLI for transport selection
+
+The demo client and server now support selecting transports via command-line arguments.
+
+- Server: [examples/mcp_server/main.cpp](../../examples/mcp_server/main.cpp)
+- Client: [examples/mcp_client/main.cpp](../../examples/mcp_client/main.cpp)
+
+Usage examples:
+
+```bash
+# stdio (default)
+./mcp_server --transport=stdio --stdiocfg="timeout_ms=30000"
+./mcp_client --transport=stdio --stdiocfg="timeout_ms=30000"
+
+# shared memory (creator/server uses create=true)
+./mcp_server --transport=shm --channel=mcp-shm
+./mcp_client --transport=shm --channel=mcp-shm
+
+# http (single request per connection; demo acceptor)
+./mcp_server --transport=http --listen=http://127.0.0.1:9443
+./mcp_client --transport=http --url=http://127.0.0.1:9443
+```
 
 ### Hardening behaviors (stdio)
 

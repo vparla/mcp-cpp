@@ -8,8 +8,11 @@
 #include "logging/Logger.h"
 #include "mcp/Server.h"
 #include "mcp/StdioTransport.hpp"
+#include "mcp/SharedMemoryTransport.hpp"
+#include "mcp/HTTPServer.hpp"
 #include "mcp/Protocol.h"
 #include <iostream>
+#include <cstddef>
 #include <chrono>
 #include <thread>
 #include <future>
@@ -18,7 +21,40 @@
 
 using namespace mcp;
 
-int main() {
+//==========================================================================================================
+// Parses simple key=value style command-line options.
+// Args:
+//   argc: Argument count
+//   argv: Argument values
+//   key: Option name including leading dashes (e.g., "--transport")
+// Returns:
+//   Optional value string when present; empty optional otherwise
+//==========================================================================================================
+static std::optional<std::string> getArgValue(int argc, char** argv, const std::string& key) {
+    for (std::size_t i = 1; i < static_cast<std::size_t>(argc); ++i) {
+        const char* arg = argv[i];
+        if (arg == nullptr) {
+            continue;
+        }
+        std::string a = arg;
+        std::size_t eq = a.find('=');
+        if (eq != std::string::npos) {
+            std::string k = a.substr(0, eq);
+            std::string v;
+            if (eq + 1 <= a.size()) {
+                v = a.substr(eq + 1);
+            } else {
+                v = std::string();
+            }
+            if (k == key) {
+                return v;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+int main(int argc, char** argv) {
     FUNC_SCOPE();
     // Respect MCP_LOG_LEVEL for CI/scripts. Default to INFO to avoid excessive DEBUG noise
     // in stdio hardening tests where many keepalive notifications are generated.
@@ -50,8 +86,12 @@ int main() {
     server->SetErrorHandler([&stopped, &server](const std::string& err) {
         LOG_INFO("Server stopping: {}", err);
         // Proactively stop the server/transport so the demo process exits promptly
-        try { (void)server->Stop().get(); } catch (...) {}
-        try { stopped.set_value(); } catch (...) {}
+        try {
+            (void)server->Stop().get();
+        } catch (...) {}
+        try {
+            stopped.set_value();
+        } catch (...) {}
     });
 
     // Optional: server keepalive interval configured by environment
@@ -68,16 +108,69 @@ int main() {
         }
     }
 
-    // Start server on stdio via factory with optional config from env
-    StdioTransportFactory tFactory;
-    std::string cfg = GetEnvOrDefault("MCP_STDIO_CONFIG", "timeout_ms=30000");
-    if (cfg != "timeout_ms=30000") {
-        LOG_INFO("Using MCP_STDIO_CONFIG: {}", cfg);
-    }
-    auto transport = tFactory.CreateTransport(cfg);
-    server->Start(std::move(transport)).get();
+    // Transport selection via CLI
+    std::string transportKind = getArgValue(argc, argv, "--transport").value_or("stdio");
+    LOG_INFO("Server starting with transport={}", transportKind);
 
-    // Wait for transport termination (e.g., stdin EOF)
-    stopped.get_future().wait();
+    if (transportKind == "stdio") {
+        StdioTransportFactory tFactory;
+        std::string cfg = GetEnvOrDefault("MCP_STDIO_CONFIG", "timeout_ms=30000");
+        if (auto v = getArgValue(argc, argv, "--stdiocfg"); v.has_value()) {
+            cfg = v.value();
+        }
+        if (cfg != "timeout_ms=30000") {
+            LOG_INFO("Using stdio config: {}", cfg);
+        }
+        auto transport = tFactory.CreateTransport(cfg);
+        server->Start(std::move(transport)).get();
+        stopped.get_future().wait();
+    } else if (transportKind == "shm") {
+        // Shared memory channel; server (creator) must set create=true
+        std::string channel = getArgValue(argc, argv, "--channel").value_or("mcp-shm");
+        std::string cfg = std::string("shm://") + channel + "?create=true";
+        LOG_INFO("Using shared memory channel: {}", channel);
+        SharedMemoryTransportFactory f;
+        auto transport = f.CreateTransport(cfg);
+        server->Start(std::move(transport)).get();
+        stopped.get_future().wait();
+    } else if (transportKind == "http") {
+        // HTTP acceptor demo: bridge request handling via Server::HandleJSONRPC
+        std::string listen = getArgValue(argc, argv, "--listen").value_or("http://127.0.0.1:9443");
+        LOG_INFO("HTTPServer listening at: {} (rpcPath=/mcp/rpc, notifyPath=/mcp/notify)", listen);
+        HTTPServerFactory hf;
+        auto acceptor = hf.CreateTransportAcceptor(listen);
+        acceptor->SetRequestHandler([&server](const JSONRPCRequest& req) {
+            return server->HandleJSONRPC(req);
+        });
+        acceptor->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note) {
+            if (note) {
+                LOG_INFO("HTTP notification received: {}", note->method);
+            }
+        });
+        acceptor->SetErrorHandler([&stopped](const std::string& e){
+            LOG_ERROR("HTTPServer error: {}", e);
+            try { stopped.set_value(); } catch (...) {}
+        });
+        (void)acceptor->Start().get();
+
+        // Optional: allow pressing Enter to exit demo
+        std::thread waiter([&stopped]() {
+            try {
+                LOG_INFO("Press ENTER to stop HTTP demo...");
+                (void)std::getchar();
+                try {
+                    stopped.set_value();
+                } catch (...) {}
+            } catch (...) {}
+        });
+        stopped.get_future().wait();
+        if (waiter.joinable()) {
+            waiter.join();
+        }
+        (void)acceptor->Stop().get();
+    } else {
+        LOG_ERROR("Unknown --transport option: {} (expected stdio|shm|http)", transportKind);
+        return 2;
+    }
     return 0;
 }

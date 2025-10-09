@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -99,7 +100,8 @@ public:
                 bool inStr = false;
                 bool esc = false;
                 while (i < s.size()) {
-                    char c = s[i++];
+                    char c = s[i];
+                    ++i;
                     
                     if (inStr) {
                         if (esc) { esc = false; continue; }
@@ -111,10 +113,19 @@ public:
                         std::string key;
                         bool e2 = false;
                         while (i < s.size()) {
-                            char d = s[i++];
-                            if (e2) { e2 = false; continue; }
-                            if (d == '\\') { e2 = true; continue; }
-                            if (d == '"') { break; }
+                            char d = s[i];
+                            ++i;
+                            if (e2) {
+                                e2 = false;
+                                continue;
+                            }
+                            if (d == '\\') {
+                                e2 = true;  
+                                continue; 
+                            }
+                            if (d == '"') { 
+                                break; 
+                            }
                             key.push_back(d);
                         }
                         while (i < s.size() && isWs(s[i])) { ++i; }
@@ -126,11 +137,20 @@ public:
                         }
                         continue;
                     }
-                    if (c == '{') { ++depth; continue; }
+                    if (c == '{') {
+                        // Guard against potential overflow on pathological nesting
+                        if (depth == std::numeric_limits<unsigned int>::max()) {
+                            return false;
+                        }
+                        ++depth;
+                        continue;
+                    }
                     if (c == '}') {
                         if (depth > 0u) {
                             --depth;
-                            if (depth == 0u) { break; }
+                            if (depth == 0u) { 
+                                break;
+                            }
                         } else {
                             break;
                         }
@@ -238,8 +258,12 @@ public:
         std::string idStr;
         std::visit([&idStr](const auto& id){
             using T = std::decay_t<decltype(id)>;
-            if constexpr (std::is_same_v<T, std::string>) { idStr = id; }
-            else if constexpr (std::is_same_v<T, int64_t>) { idStr = std::to_string(id); }
+            if constexpr (std::is_same_v<T, std::string>) {
+                idStr = id;
+            }
+            else if constexpr (std::is_same_v<T, int64_t>) {
+                idStr = std::to_string(id);
+            }
         }, response.id);
 
         std::lock_guard<std::mutex> lk(requestMutex);
@@ -409,8 +433,15 @@ std::future<std::unique_ptr<JSONRPCResponse>> SharedMemoryTransport::SendRequest
     std::string requestId; bool callerSetId = false;
     std::visit([&](auto&& idVal){
         using T = std::decay_t<decltype(idVal)>;
-        if constexpr (std::is_same_v<T, std::string>) { if (!idVal.empty()) { requestId = idVal; callerSetId = true; } }
-        else if constexpr (std::is_same_v<T, int64_t>) { requestId = std::to_string(idVal); callerSetId = true; }
+        if constexpr (std::is_same_v<T, std::string>) {
+            if (!idVal.empty()) {
+                requestId = idVal; callerSetId = true;
+            }
+        }
+        else if constexpr (std::is_same_v<T, int64_t>) {
+            requestId = std::to_string(idVal); 
+            callerSetId = true;
+        }
     }, request->id);
     if (!callerSetId) {
         // Simple request id generator
