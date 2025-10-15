@@ -48,6 +48,25 @@ public:
         std::string caPath;
         unsigned int connectTimeoutMs{10000};
         unsigned int readTimeoutMs{30000};
+
+        //======================================================================================================
+        // Authentication (optional)
+        // Purpose: Configure HTTP Authorization header injection and OAuth2 client-credentials flow.
+        // Fields:
+        //   auth: "none" | "bearer" | "oauth2". Default: "none" (no Authorization header added).
+        //   bearerToken: Static Bearer token value when auth=="bearer".
+        //   oauthTokenUrl: Full URL to the OAuth2 token endpoint (e.g., https://auth.example.com/oauth2/token).
+        //   clientId/clientSecret: OAuth2 client credentials for client-credentials grant.
+        //   scope: Optional space-delimited scopes for the token request.
+        //   tokenRefreshSkewSeconds: Seconds to subtract from expires_in to proactively refresh before expiry.
+        //======================================================================================================
+        std::string auth{"none"};
+        std::string bearerToken;
+        std::string oauthTokenUrl;
+        std::string clientId;
+        std::string clientSecret;
+        std::string scope;
+        unsigned int tokenRefreshSkewSeconds{60};
     };
 
     explicit HTTPTransport(const Options& opts);

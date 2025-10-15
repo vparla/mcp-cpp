@@ -62,6 +62,7 @@ add_executable(mcp_tests
   test_validation_sampling.cpp
   test_validation_strict.cpp
   test_shared_memory_transport.cpp
+  test_http_auth.cpp
   )
 
 target_link_libraries(mcp_tests

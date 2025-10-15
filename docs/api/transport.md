@@ -128,7 +128,7 @@ auto clientT = f.CreateTransport("mcp-shm");
 
 Header: [include/mcp/HTTPTransport.hpp](../../include/mcp/HTTPTransport.hpp)
 
-Factory config is a `;`-separated `key=value` list. Recognized keys: `scheme`, `host`, `port`, `rpcPath`, `notifyPath`, `serverName`, `caFile`, `caPath`.
+Factory config is a `;`-separated `key=value` list. Recognized keys: `scheme`, `host`, `port`, `rpcPath`, `notifyPath`, `serverName`, `caFile`, `caPath`, `connectTimeoutMs`, `readTimeoutMs`.
 
 Example:
 
@@ -138,6 +138,82 @@ Example:
 mcp::HTTPTransportFactory f;
 auto t = f.CreateTransport("scheme=http; host=127.0.0.1; port=9443; rpcPath=/mcp/rpc; notifyPath=/mcp/notify; serverName=127.0.0.1");
 ```
+
+#### HTTP/HTTPS authentication
+
+Optional authentication for the HTTP client transport is supported.
+
+- Config keys (semicolon‑delimited `key=value`):
+  - `auth` — `none` (default) | `bearer` | `oauth2`
+  - `bearerToken` or `token` — static bearer token when `auth=bearer`
+  - `oauthUrl` or `oauthTokenUrl` — OAuth2 token endpoint URL (e.g., `https://auth.example.com/oauth2/token`)
+  - `clientId` — OAuth2 client id (client‑credentials grant)
+  - `clientSecret` — OAuth2 client secret (client‑credentials grant)
+  - `scope` — optional space‑delimited scopes
+  - `tokenRefreshSkewSeconds` or `tokenSkew` — pre‑expiry refresh skew (seconds, default 60)
+
+Examples:
+
+```cpp
+// Static Bearer token
+auto t1 = f.CreateTransport(
+  "scheme=https; host=api.example.com; port=443; rpcPath=/mcp/rpc; notifyPath=/mcp/notify;"
+  " auth=bearer; bearerToken=XYZ"
+);
+
+// OAuth2 client‑credentials (token cached and refreshed proactively)
+auto t2 = f.CreateTransport(
+  "scheme=https; host=api.example.com; port=443; rpcPath=/mcp/rpc; notifyPath=/mcp/notify;"
+  " auth=oauth2; oauthUrl=https://auth.example.com/oauth2/token; clientId=myid; clientSecret=mysecret; scope=a b c; tokenSkew=60"
+);
+```
+
+Notes:
+
+- HTTPS uses TLS 1.3 and hostname verification (SNI) by default, sharing the same trust configuration as normal requests.
+- Secrets are not logged. Prefer environment variables or secure config handling in your process to populate `clientSecret`.
+- The token endpoint response must include `access_token` and may include `expires_in` (seconds). When absent, a default 1‑hour lifetime is assumed.
+
+#### HTTP client diagnostics and debug logging
+
+The HTTP client surfaces transport‑level diagnostics via `HTTPTransport::SetErrorHandler()`. When an error handler is registered, the transport emits concise stage markers to help troubleshoot request lifecycles and shutdown behavior.
+
+Examples of messages you may see when debug is enabled:
+
+- `HTTP DEBUG: resolved <host>:<port> path=<path>`
+- `HTTP DEBUG: http connected` / `https connected`
+- `HTTP DEBUG: http wrote request` / `https wrote request`
+- `HTTP DEBUG: http read response bytes=<N>` (or `https ...`)
+- `HTTPTransport: coPostJson done; body.size=<N>; key=<id>`
+- `HTTPTransport: parsed response id=<id|null>`
+- `HTTPTransport: deliver lookup key=<id> hit|miss; pending=<count>`
+- `HTTPTransport: set_value start` / `HTTPTransport: set_value done`
+- `HTTP Close: begin / ioc.stop() called / joining ioThread / ioThread joined / failing pending size=<count>`
+
+Quick usage with shorter timeouts for fast failure in tests:
+
+```cpp
+#include "mcp/HTTPTransport.hpp"
+
+mcp::HTTPTransportFactory f;
+auto t = f.CreateTransport(
+  "scheme=http; host=127.0.0.1; port=8080; rpcPath=/rpc; notifyPath=/notify; "
+  "connectTimeoutMs=500; readTimeoutMs=1500; auth=bearer; bearerToken=XYZ"
+);
+
+t->SetErrorHandler([](const std::string& msg){
+  std::cerr << "[HTTPTransport] " << msg << std::endl;
+});
+
+(void)t->Start().get();
+// ... SendRequest / SendNotification ...
+(void)t->Close().get();
+```
+
+Notes:
+
+- Debug messages are emitted only when an error handler is set. They are intended for diagnostics and may evolve; do not assert on their exact strings in production.
+- `connectTimeoutMs` controls the connect phase deadline; `readTimeoutMs` bounds the write+read phase per request.
 
 ## ITransportAcceptor (server-side acceptors)
 
