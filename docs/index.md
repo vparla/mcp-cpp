@@ -14,7 +14,8 @@ Contents:
 - Getting Started (Docker-first)
 - Build & Test: see [BUILD+TEST.MD](../BUILD+TEST.MD)
 - API Overview
-- Transports (factory + acceptor + demo CLI): see [docs/api/transport.md](./api/transport.md)
+ - Transports (factory + acceptor + demo CLI): see [docs/api/transport.md](./api/transport.md)
+  - HTTP Authentication (Bearer/OAuth2): see [docs/api/transport.md#httphttps-authentication](./api/transport.md#httphttps-authentication)
 - Resource Subscriptions (Client API): see [README.md#resource-subscriptions](../README.md#resource-subscriptions)
  - Paging (Client API): see [README.md#paging](../README.md#paging)
  - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)

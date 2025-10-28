@@ -33,7 +33,9 @@ This section summarizes the primary SDK interfaces and feature-specific APIs.
 - Server API header: [include/mcp/Server.h](c:/Work/mcp-cpp/include/mcp/Server.h)
 - Transport headers: [include/mcp/Transport.h](c:/Work/mcp-cpp/include/mcp/Transport.h),
   [include/mcp/InMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/InMemoryTransport.hpp),
-  [include/mcp/StdioTransport.hpp](c:/Work/mcp-cpp/include/mcp/StdioTransport.hpp)
+  [include/mcp/StdioTransport.hpp](c:/Work/mcp-cpp/include/mcp/StdioTransport.hpp),
+  [include/mcp/SharedMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/SharedMemoryTransport.hpp),
+  [include/mcp/HTTPTransport.hpp](c:/Work/mcp-cpp/include/mcp/HTTPTransport.hpp)
 
 ### Client API (IClient / Client)
 
@@ -80,6 +82,14 @@ ClientCapabilities caps; auto serverCaps = client->Initialize(info, caps).get();
 - Implementations:
   - In-memory: [include/mcp/InMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/InMemoryTransport.hpp)
   - Stdio: [include/mcp/StdioTransport.hpp](c:/Work/mcp-cpp/include/mcp/StdioTransport.hpp)
+  - Shared Memory: [include/mcp/SharedMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/SharedMemoryTransport.hpp)
+  - HTTP client: [include/mcp/HTTPTransport.hpp](c:/Work/mcp-cpp/include/mcp/HTTPTransport.hpp)
+
+#### HTTP Authentication (Bearer/OAuth2)
+
+The HTTP client transport supports static Bearer tokens and OAuth2 client‑credentials.
+See configuration keys and `IAuth` injection examples in
+[docs/api/transport.md](./docs/api/transport.md#httphttps-authentication).
 
 ### Resource Templates
 

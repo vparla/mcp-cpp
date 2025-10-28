@@ -11,6 +11,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <future>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -47,6 +48,9 @@ public:
     ITransport::NotificationHandler notificationHandler;
     ITransport::ErrorHandler errorHandler;
 
+    std::promise<void> listenReadyPromise;
+    std::atomic<bool> listenReadySignaled{false};
+
     explicit Impl(const HTTPServer::Options& o) : opts(o) {
         if (opts.scheme == "https") {
             sslCtx = std::make_unique<ssl::context>(ssl::context::tls_server);
@@ -75,6 +79,15 @@ public:
 
     void setError(const std::string& msg) {
         if (errorHandler) { errorHandler(msg); }
+    }
+
+    void signalReadyOrErrorOnce() {
+        bool expected = false;
+        if (listenReadySignaled.compare_exchange_strong(expected, true)) {
+            try {
+                listenReadyPromise.set_value();
+            } catch (...) {}
+        }
     }
 
     net::awaitable<void> session_plain(tcp::socket socket) {
@@ -211,11 +224,13 @@ public:
             // Validate port strictly: numeric and within [0, 65535]
             if (opts.port.empty()) {
                 setError("HTTPServer invalid port: empty");
+                signalReadyOrErrorOnce();
                 co_return;
             }
             bool allDigits = std::all_of(opts.port.begin(), opts.port.end(), [](unsigned char ch){ return std::isdigit(ch) != 0; });
             if (!allDigits) {
                 setError(std::string("HTTPServer invalid port (non-numeric): ") + opts.port);
+                signalReadyOrErrorOnce();
                 co_return;
             }
             unsigned long portNum = 0;
@@ -223,14 +238,16 @@ public:
                 portNum = std::stoul(opts.port);
             } catch (...) {
                 setError(std::string("HTTPServer invalid port (parse failure): ") + opts.port);
+                signalReadyOrErrorOnce();
                 co_return;
             }
             if (portNum > 65535ul) {
                 setError(std::string("HTTPServer invalid port (out of range): ") + opts.port);
+                signalReadyOrErrorOnce();
                 co_return;
             }
             tcp::resolver resolver(co_await net::this_coro::executor);
-            auto r = resolver.resolve(opts.address, opts.port);
+            auto r = co_await resolver.async_resolve(opts.address, opts.port, net::use_awaitable);
             tcp::endpoint ep = *r.begin();
 
             acceptor = std::make_unique<tcp::acceptor>(ioc);
@@ -238,6 +255,8 @@ public:
             acceptor->set_option(tcp::acceptor::reuse_address(true));
             acceptor->bind(ep);
             acceptor->listen();
+
+            signalReadyOrErrorOnce();
 
             while (running.load()) {
                 tcp::socket socket = co_await acceptor->async_accept(net::use_awaitable);
@@ -256,6 +275,7 @@ public:
             } else {
                 setError(std::string("HTTPServer accept error: ") + e.what());
             }
+            signalReadyOrErrorOnce();
         } catch (const std::exception& e) {
             if (!running.load()) {
                 // Suppress shutdown-related errors; log at DEBUG only in debug builds
@@ -265,6 +285,8 @@ public:
             } else {
                 setError(std::string("HTTPServer accept error: ") + e.what());
             }
+            // Ensure any waiter on Start().get() is released
+            signalReadyOrErrorOnce();
         }
         co_return;
     }
@@ -276,16 +298,18 @@ HTTPServer::HTTPServer(const Options& opts)
 HTTPServer::~HTTPServer() = default;
 
 std::future<void> HTTPServer::Start() {
-    std::promise<void> ready; auto fut = ready.get_future();
+    pImpl->listenReadyPromise = std::promise<void>();
+    pImpl->listenReadySignaled.store(false);
+    auto fut = pImpl->listenReadyPromise.get_future();
+
     pImpl->running.store(true);
-    pImpl->ioThread = std::thread([this, pr = std::move(ready)]() mutable {
+    pImpl->ioThread = std::thread([this]() {
         try {
             net::co_spawn(pImpl->ioc, pImpl->acceptLoop(), net::detached);
-            pr.set_value();
             pImpl->ioc.run();
         } catch (const std::exception& e) {
             if (pImpl->errorHandler) { pImpl->errorHandler(e.what()); }
-            pr.set_value();
+            pImpl->signalReadyOrErrorOnce();
         }
     });
     return fut;

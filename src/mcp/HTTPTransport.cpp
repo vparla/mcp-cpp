@@ -14,11 +14,14 @@
 #include <mutex>
 #include <unordered_map>
 #include <chrono>
+#include <future>
+#include <string>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/co_spawn.hpp>
 #include <boost/asio/detached.hpp>
+#include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
@@ -28,8 +31,12 @@
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/Transport.h"
 #include "mcp/HTTPTransport.hpp"
+#include "mcp/auth/IAuth.hpp"
+#include "mcp/auth/BearerAuth.hpp"
+#include "mcp/auth/OAuth2ClientCredentialsAuth.hpp"
 
 #include <openssl/ssl.h>
+#include <openssl/err.h>
 
 namespace mcp {
 namespace net = boost::asio;
@@ -56,10 +63,9 @@ public:
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     bool caInitOk{true};
 
-    // OAuth token cache (for auth == oauth2)
-    std::mutex tokenMutex;
-    std::string cachedAccessToken;
-    std::chrono::steady_clock::time_point tokenExpiry{};
+    // Pluggable auth
+    std::shared_ptr<mcp::auth::IAuth> authStrong;
+    mcp::auth::IAuth* authWeak{nullptr};
 
     explicit Impl(const HTTPTransport::Options& o) : opts(o) {
         // Random session id similar to InMemoryTransport
@@ -90,6 +96,28 @@ public:
             }
             sslCtx->set_verify_mode(ssl::verify_peer);
         }
+
+        // Construct auth based on options (back-compat with string config)
+        try {
+            if (opts.auth == std::string("bearer")) {
+                if (!opts.bearerToken.empty()) {
+                    authStrong = std::make_shared<mcp::auth::BearerAuth>(opts.bearerToken);
+                }
+            } else if (opts.auth == std::string("oauth2")) {
+                authStrong = std::make_shared<mcp::auth::OAuth2ClientCredentialsAuth>(
+                    opts.oauthTokenUrl,
+                    opts.clientId,
+                    opts.clientSecret,
+                    opts.scope,
+                    opts.tokenRefreshSkewSeconds,
+                    opts.connectTimeoutMs,
+                    opts.readTimeoutMs,
+                    opts.caFile,
+                    opts.caPath);
+            }
+        } catch (...) {
+            // best-effort; errors surface during ensureReady()
+        }
     }
 
     ~Impl() {
@@ -100,293 +128,30 @@ public:
     }
 
     void setError(const std::string& msg) {
-        if (errorHandler) { errorHandler(msg); }
-    }
-
-    std::string generateRequestId() { return std::string("http-req-") + std::to_string(++requestCounter); }
-
-    // ------------------------------------------------------------------------------------------------------
-    // URL parsing helpers (very small, adequate for https://host[:port]/path)
-    // ------------------------------------------------------------------------------------------------------
-    struct UrlParts {
-        std::string scheme;
-        std::string host;
-        std::string port;
-        std::string path;
-        std::string serverName;
-    };
-
-    static UrlParts parseUrl(const std::string& url) {
-        UrlParts parts;
-        std::size_t pos = 0;
-
-        std::size_t schemeEnd = url.find("://");
-        if (schemeEnd != std::string::npos) {
-            parts.scheme = url.substr(0, schemeEnd);
-            pos = schemeEnd + 3;
-        } else {
-            parts.scheme = std::string("http");
-            pos = 0;
-        }
-
-        std::size_t slash = url.find('/', pos);
-        std::string hostPort;
-        if (slash == std::string::npos) {
-            hostPort = url.substr(pos);
-            parts.path = std::string("/");
-        } else {
-            hostPort = url.substr(pos, slash - pos);
-            parts.path = url.substr(slash);
-        }
-
-        std::size_t colon = hostPort.find(':');
-        if (colon == std::string::npos) {
-            parts.host = hostPort;
-            if (parts.scheme == std::string("https")) {
-                parts.port = std::string("443");
-            } else {
-                parts.port = std::string("80");
-            }
-        } else {
-            parts.host = hostPort.substr(0, colon);
-            parts.port = hostPort.substr(colon + 1);
-        }
-
-        parts.serverName = parts.host;
-        return parts;
-    }
-
-    static std::string urlEncodeForm(const std::string& s) {
-        std::ostringstream oss;
-        for (std::size_t i = 0; i < s.size(); ++i) {
-            unsigned char c = static_cast<unsigned char>(s[i]);
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~') {
-                oss << static_cast<char>(c);
-            } else if (c == ' ') {
-                oss << '+';
-            } else {
-                oss << '%';
-                const char* hex = "0123456789ABCDEF";
-                oss << hex[(c >> 4) & 0xFu] << hex[c & 0xFu];
-            }
-        }
-        return oss.str();
-    }
-
-    static bool parseJsonStringField(const std::string& json, const std::string& key, std::string& out) {
-        out.clear();
-        std::string needle = std::string("\"") + key + std::string("\"");
-        std::size_t k = json.find(needle);
-        if (k == std::string::npos) {
-            return false;
-        }
-        std::size_t colon = json.find(':', k + needle.size());
-        if (colon == std::string::npos) {
-            return false;
-        }
-        std::size_t q1 = json.find('"', colon + 1);
-        if (q1 == std::string::npos) {
-            return false;
-        }
-        std::size_t q2 = q1 + 1;
-        while (q2 < json.size()) {
-            if (json[q2] == '"' && json[q2 - 1] != '\\') {
-                break;
-            }
-            q2 += 1;
-        }
-        if (q2 >= json.size()) {
-            return false;
-        }
-        out = json.substr(q1 + 1, q2 - q1 - 1);
-        return true;
-    }
-
-    static bool parseJsonIntField(const std::string& json, const std::string& key, int& out) {
-        std::string needle = std::string("\"") + key + std::string("\"");
-        std::size_t k = json.find(needle);
-        if (k == std::string::npos) {
-            return false;
-        }
-        std::size_t colon = json.find(':', k + needle.size());
-        if (colon == std::string::npos) {
-            return false;
-        }
-        std::size_t i = colon + 1;
-        while (i < json.size() && (json[i] == ' ' || json[i] == '\t' || json[i] == '\r' || json[i] == '\n')) {
-            i += 1;
-        }
-        std::size_t j = i;
-        while (j < json.size() && ((json[j] >= '0' && json[j] <= '9') || json[j] == '-')) {
-            j += 1;
-        }
-        try {
-            out = std::stoi(json.substr(i, j - i));
-            return true;
-        } catch (...) {
-            return false;
+        if (errorHandler) {
+            errorHandler(msg);
         }
     }
 
-    // Coroutine: POST application/x-www-form-urlencoded to arbitrary URL and return response body
-    net::awaitable<std::string> coPostFormUrlencoded(const std::string& url, const std::string& body) {
-        try {
-            UrlParts u = parseUrl(url);
-            tcp::resolver resolver(co_await net::this_coro::executor);
-            auto results = co_await resolver.async_resolve(u.host, u.port, net::use_awaitable);
-            if (errorHandler) { errorHandler(std::string("HTTP DEBUG: token resolved ") + u.host + std::string(":") + u.port + std::string(" path=") + u.path); }
-
-            if (u.scheme == std::string("https")) {
-                ssl::context* ctxPtr = nullptr;
-                std::unique_ptr<ssl::context> localCtx;
-                if (sslCtx) {
-                    ctxPtr = sslCtx.get();
-                } else {
-                    localCtx = std::make_unique<ssl::context>(ssl::context::tls_client);
-                    ::SSL_CTX_set_min_proto_version(localCtx->native_handle(), TLS1_3_VERSION);
-                    ::SSL_CTX_set_max_proto_version(localCtx->native_handle(), TLS1_3_VERSION);
-                    try {
-                        localCtx->set_default_verify_paths();
-                    } catch (...) {
-                        // best-effort
-                    }
-                    localCtx->set_verify_mode(ssl::verify_peer);
-                    ctxPtr = localCtx.get();
-                }
-
-                boost::beast::ssl_stream<boost::beast::tcp_stream> stream(co_await net::this_coro::executor, *ctxPtr);
-                if (!u.serverName.empty()) {
-                    if (!::SSL_set_tlsext_host_name(stream.native_handle(), u.serverName.c_str())) {
-                        setError("HTTPS: failed to set SNI hostname");
-                    }
-                    (void)::SSL_set1_host(stream.native_handle(), u.serverName.c_str());
-                }
-                stream.next_layer().expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
-                co_await stream.next_layer().async_connect(results, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: token https connected"); }
-                co_await stream.async_handshake(ssl::stream_base::client, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: token https handshake complete"); }
-
-                http::request<http::string_body> req{http::verb::post, u.path, 11};
-                req.set(http::field::host, u.serverName);
-                req.set(http::field::content_type, "application/x-www-form-urlencoded");
-                req.set(http::field::accept, "application/json");
-                req.set(http::field::connection, "close");
-                req.body() = body;
-                req.prepare_payload();
-
-                stream.next_layer().expires_after(std::chrono::milliseconds(opts.readTimeoutMs));
-                co_await http::async_write(stream, req, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: token https wrote form"); }
-                boost::beast::flat_buffer buffer;
-                http::response<http::string_body> res;
-                co_await http::async_read(stream, buffer, res, net::use_awaitable);
-                if (errorHandler) { errorHandler(std::string("HTTP DEBUG: token https read response bytes=") + std::to_string(res.body().size())); }
-                boost::system::error_code ec; 
-                stream.shutdown(ec);
-                co_return res.body();
-            } else {
-                boost::beast::tcp_stream stream(co_await net::this_coro::executor);
-                stream.expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
-                co_await stream.async_connect(results, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: token http connected"); }
-
-                http::request<http::string_body> req{http::verb::post, u.path, 11};
-                req.set(http::field::host, u.host);
-                req.set(http::field::content_type, "application/x-www-form-urlencoded");
-                req.set(http::field::accept, "application/json");
-                req.set(http::field::connection, "close");
-                req.body() = body;
-                req.prepare_payload();
-
-                stream.expires_after(std::chrono::milliseconds(opts.readTimeoutMs));
-                co_await http::async_write(stream, req, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: token http wrote form"); }
-                boost::beast::flat_buffer buffer;
-                http::response<http::string_body> res;
-                co_await http::async_read(stream, buffer, res, net::use_awaitable);
-                if (errorHandler) { errorHandler(std::string("HTTP DEBUG: token http read response bytes=") + std::to_string(res.body().size())); }
-                boost::system::error_code ec;
-                stream.socket().shutdown(tcp::socket::shutdown_both, ec);
-                co_return res.body();
-            }
-        } catch (const std::exception& e) {
-            setError(std::string("HTTP coPostFormUrlencoded failed: ") + e.what());
-        }
-        co_return std::string();
+    std::string generateRequestId() { 
+        return std::string("http-req-") + std::to_string(++requestCounter); 
     }
-
-    // Coroutine: ensure Authorization header is set per opts.auth; may fetch OAuth token
+    
+    // Coroutine: apply auth headers via IAuth
     net::awaitable<void> coEnsureAuthHeader(http::request<http::string_body>& req) {
-        if (opts.auth == std::string("bearer")) {
-            if (!opts.bearerToken.empty()) {
-                req.set(http::field::authorization, std::string("Bearer ") + opts.bearerToken);
-            }
-            co_return;
-        }
-
-        if (opts.auth == std::string("oauth2")) {
-            bool haveValid = false;
-            std::string token;
-            {
-                std::lock_guard<std::mutex> lk(tokenMutex);
-                auto now = std::chrono::steady_clock::now();
-                if (!cachedAccessToken.empty()) {
-                    if (now + std::chrono::seconds(opts.tokenRefreshSkewSeconds) < tokenExpiry) {
-                        haveValid = true;
-                        token = cachedAccessToken;
-                    }
-                }
-            }
-
-            if (!haveValid) {
-                // Fetch new token
-                std::ostringstream form;
-                form << "grant_type=client_credentials";
-                if (!opts.clientId.empty()) {
-                    form << "&client_id=" << urlEncodeForm(opts.clientId);
-                }
-                if (!opts.clientSecret.empty()) {
-                    form << "&client_secret=" << urlEncodeForm(opts.clientSecret);
-                }
-                if (!opts.scope.empty()) {
-                    form << "&scope=" << urlEncodeForm(opts.scope);
-                }
-                std::string body = form.str();
-                std::string resp = co_await coPostFormUrlencoded(opts.oauthTokenUrl, body);
-                if (!resp.empty()) {
-                    std::string at;
-                    int expiresIn = 0;
-                    bool ok1 = parseJsonStringField(resp, std::string("access_token"), at);
-                    bool ok2 = parseJsonIntField(resp, std::string("expires_in"), expiresIn);
-                    if (ok1) {
-                        std::lock_guard<std::mutex> lk(tokenMutex);
-                        cachedAccessToken = at;
-                        if (ok2 && expiresIn > 0) {
-                            tokenExpiry = std::chrono::steady_clock::now() + std::chrono::seconds(static_cast<unsigned int>(expiresIn));
-                        } else {
-                            tokenExpiry = std::chrono::steady_clock::now() + std::chrono::seconds(3600);
-                        }
-                        token = cachedAccessToken;
-                        haveValid = true;
-                        if (errorHandler) { errorHandler(std::string("OAuth2: token obtained; expiresIn=") + std::to_string(ok2 ? expiresIn : 3600)); }
-                    } else {
-                        setError("OAuth2: token endpoint response missing access_token");
-                    }
-                } else {
-                    setError("OAuth2: empty response from token endpoint");
-                }
-            }
-
-            if (haveValid) {
-                req.set(http::field::authorization, std::string("Bearer ") + token);
+        mcp::auth::IAuth* a = authStrong ? authStrong.get() : authWeak;
+        if (a) {
+            co_await a->ensureReady();
+            auto hs = a->headers();
+            for (const auto& h : hs) {
+                req.set(h.name, h.value);
             }
         }
         co_return;
     }
 
     // Coroutine: POST JSON and return response body
-    net::awaitable<std::string> coPostJson(const std::string path, const std::string body) {
+    net::awaitable<std::string> coPostJson(std::string path, std::string body) {
         try {
             // Build request first and ensure Authorization header (may perform OAuth token fetch)
             http::request<http::string_body> req{http::verb::post, path, 11};
@@ -398,51 +163,114 @@ public:
             // Authorization header (bearer/oauth2) before opening RPC connection to avoid server read deadlock
             co_await coEnsureAuthHeader(req);
 
-            tcp::resolver resolver(co_await net::this_coro::executor);
+            auto ex = co_await net::this_coro::executor;
+            tcp::resolver resolver(ex);
             auto results = co_await resolver.async_resolve(opts.host, opts.port, net::use_awaitable);
-            if (errorHandler) { errorHandler(std::string("HTTP DEBUG: resolved ") + opts.host + std::string(":") + opts.port + std::string(" path=") + path); }
+            if (errorHandler) {
+                errorHandler(std::string("HTTP DEBUG: resolved ") + opts.host + std::string(":") + opts.port + std::string(" path=") + path);
+            }
 
             if (opts.scheme == "https") {
                 if (!caInitOk) {
                     setError("HTTPS: CA initialization failed (bad caFile/caPath)");
                     co_return std::string();
                 }
-                boost::beast::ssl_stream<boost::beast::tcp_stream> stream(co_await net::this_coro::executor, *sslCtx);
+                boost::beast::ssl_stream<boost::beast::tcp_stream> stream(ex, *sslCtx);
                 if (!opts.serverName.empty()) {
                     if (!::SSL_set_tlsext_host_name(stream.native_handle(), opts.serverName.c_str())) {
                         setError("HTTPS: failed to set SNI hostname");
                     }
                     (void)::SSL_set1_host(stream.native_handle(), opts.serverName.c_str());
                 }
-                stream.next_layer().expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
-                co_await stream.next_layer().async_connect(results, net::use_awaitable);
+                {
+                    unsigned int maxAttempts = 5u;
+                    for (unsigned int attempt = 0u; attempt < maxAttempts; ++attempt) {
+                        bool retryDelay = false;
+                        try {
+                            stream.next_layer().expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
+                            co_await stream.next_layer().async_connect(results, net::use_awaitable);
+                            break;
+                        } catch (const boost::system::system_error& e) {
+                            if (e.code() == boost::asio::error::connection_refused && attempt + 1u < maxAttempts) {
+                                if (errorHandler) {
+                                    errorHandler("HTTP DEBUG: https connect refused; retrying");
+                                }
+                                retryDelay = true;
+                            } else {
+                                throw;
+                            }
+                        }
+                        if (retryDelay) {
+                            net::steady_timer timer(ex);
+                            timer.expires_after(std::chrono::milliseconds(50));
+                            co_await timer.async_wait(net::use_awaitable);
+                        }
+                    }
+                }
                 co_await stream.async_handshake(ssl::stream_base::client, net::use_awaitable);
 
                 req.set(http::field::host, opts.serverName.empty() ? opts.host : opts.serverName);
                 // Set timeouts
                 stream.next_layer().expires_after(std::chrono::milliseconds(opts.readTimeoutMs));
                 co_await http::async_write(stream, req, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: https wrote request"); }
+                if (errorHandler) {
+                    errorHandler("HTTP DEBUG: https wrote request");
+                }
                 boost::beast::flat_buffer buffer;
                 http::response<http::string_body> res;
                 co_await http::async_read(stream, buffer, res, net::use_awaitable);
-                if (errorHandler) { errorHandler(std::string("HTTP DEBUG: https read response bytes=") + std::to_string(res.body().size())); }
+                if (errorHandler) {
+                    errorHandler(std::string("HTTP DEBUG: https read response bytes=") + std::to_string(res.body().size()));
+                }
+                if (errorHandler) {
+                    errorHandler(std::string("HTTP DEBUG: https status=") + std::to_string(res.result_int()) + std::string(" content-type=") + std::string(res[http::field::content_type]));
+                }
                 boost::system::error_code ec; stream.shutdown(ec);
                 co_return res.body();
             } else {
-                boost::beast::tcp_stream stream(co_await net::this_coro::executor);
-                stream.expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
-                co_await stream.async_connect(results, net::use_awaitable);
+                boost::beast::tcp_stream stream(ex);
+                {
+                    unsigned int maxAttempts = 5u;
+                    for (unsigned int attempt = 0u; attempt < maxAttempts; ++attempt) {
+                        bool retryDelay = false;
+                        try {
+                            stream.expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
+                            co_await stream.async_connect(results, net::use_awaitable);
+                            break;
+                        } catch (const boost::system::system_error& e) {
+                            if (e.code() == boost::asio::error::connection_refused && attempt + 1u < maxAttempts) {
+                                if (errorHandler) {
+                                    errorHandler("HTTP DEBUG: http connect refused; retrying");
+                                }
+                                retryDelay = true;
+                            } else {
+                                throw;
+                            }
+                        }
+                        if (retryDelay) {
+                            net::steady_timer timer(ex);
+                            timer.expires_after(std::chrono::milliseconds(50));
+                            co_await timer.async_wait(net::use_awaitable);
+                        }
+                    }
+                }
                 if (errorHandler) { errorHandler("HTTP DEBUG: http connected"); }
 
                 req.set(http::field::host, opts.host);
                 stream.expires_after(std::chrono::milliseconds(opts.readTimeoutMs));
                 co_await http::async_write(stream, req, net::use_awaitable);
-                if (errorHandler) { errorHandler("HTTP DEBUG: http wrote request"); }
+                if (errorHandler) {
+                    errorHandler("HTTP DEBUG: http wrote request");
+                }
                 boost::beast::flat_buffer buffer;
                 http::response<http::string_body> res;
                 co_await http::async_read(stream, buffer, res, net::use_awaitable);
-                if (errorHandler) { errorHandler(std::string("HTTP DEBUG: http read response bytes=") + std::to_string(res.body().size())); }
+                if (errorHandler) {
+                    errorHandler(std::string("HTTP DEBUG: http read response bytes=") + std::to_string(res.body().size()));
+                }
+                if (errorHandler) {
+                    errorHandler(std::string("HTTP DEBUG: http status=") + std::to_string(res.result_int()) + std::string(" content-type=") + std::string(res[http::field::content_type]));
+                }
                 boost::system::error_code ec; stream.socket().shutdown(tcp::socket::shutdown_both, ec);
                 co_return res.body();
             }
@@ -555,7 +383,9 @@ std::future<std::unique_ptr<JSONRPCResponse>> HTTPTransport::SendRequest(
                     callerSetId = true;
                 }
             }
-            else if constexpr (std::is_same_v<T, int64_t>) { callerSetId = true; }
+            else if constexpr (std::is_same_v<T, int64_t>) {
+                callerSetId = true;
+            }
         }, request->id);
         if (!callerSetId) {
             const std::string newId = pImpl->generateRequestId();
@@ -582,7 +412,7 @@ std::future<std::unique_ptr<JSONRPCResponse>> HTTPTransport::SendRequest(
         pImpl->pendingRequests[idStr] = std::move(promise);
     }
 
-    net::co_spawn(pImpl->ioc, pImpl->coPostJson(pImpl->opts.rpcPath, payload),
+    net::co_spawn(pImpl->ioc, pImpl->coPostJson(pImpl->opts.rpcPath, std::move(payload)),
         [this, idStr](std::exception_ptr eptr, std::string body) mutable {
             if (pImpl->errorHandler) {
                 pImpl->errorHandler(std::string("HTTPTransport: coPostJson done; body.size=") + std::to_string(body.size()) + std::string("; key=") + idStr);
@@ -668,7 +498,7 @@ std::future<void> HTTPTransport::SendNotification(
     if (!pImpl->connected.load()) { done.set_value(); return fut; }
     std::string payload = notification ? notification->Serialize() : std::string();
 
-    net::co_spawn(pImpl->ioc, pImpl->coPostJson(pImpl->opts.notifyPath, payload),
+    net::co_spawn(pImpl->ioc, pImpl->coPostJson(pImpl->opts.notifyPath, std::move(payload)),
         [this, pr = std::move(done)](std::exception_ptr eptr, std::string /*body*/) mutable {
             if (eptr) {
                 try {
@@ -700,6 +530,30 @@ void HTTPTransport::SetRequestHandler(RequestHandler handler) {
 void HTTPTransport::SetErrorHandler(ErrorHandler handler) {
     FUNC_SCOPE();
     pImpl->errorHandler = std::move(handler);
+    if (pImpl->errorHandler) {
+        mcp::auth::IAuth* a = pImpl->authStrong ? pImpl->authStrong.get() : pImpl->authWeak;
+        if (a) {
+            a->setErrorHandler(pImpl->errorHandler);
+        }
+    }
+}
+
+void HTTPTransport::SetAuth(mcp::auth::IAuth& auth) {
+    FUNC_SCOPE();
+    pImpl->authStrong.reset();
+    pImpl->authWeak = &auth;
+    if (pImpl->errorHandler) {
+        auth.setErrorHandler(pImpl->errorHandler);
+    }
+}
+
+void HTTPTransport::SetAuth(std::shared_ptr<mcp::auth::IAuth> auth) {
+    FUNC_SCOPE();
+    pImpl->authWeak = nullptr;
+    pImpl->authStrong = std::move(auth);
+    if (pImpl->errorHandler && pImpl->authStrong) {
+        pImpl->authStrong->setErrorHandler(pImpl->errorHandler);
+    }
 }
 
 //==========================================================================================================

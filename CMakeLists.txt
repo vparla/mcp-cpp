@@ -49,6 +49,8 @@ add_library(mcp_cpp STATIC
     src/mcp/HTTPServer.cpp
     src/mcp/Client.cpp
     src/mcp/Server.cpp
+    src/mcp/auth/OAuthClient.cpp
+    src/mcp/auth/OAuth2ClientCredentialsAuth.cpp
 )
 add_library(mcp::cpp ALIAS mcp_cpp)
 

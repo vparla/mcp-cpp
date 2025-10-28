@@ -14,6 +14,7 @@
 #include <functional>
 
 #include "mcp/Transport.h"
+#include "mcp/auth/IAuth.hpp"
 
 namespace mcp {
 
@@ -111,6 +112,8 @@ public:
     void SetNotificationHandler(NotificationHandler handler) override;
     void SetRequestHandler(RequestHandler handler) override;
     void SetErrorHandler(ErrorHandler handler) override;
+    void SetAuth(mcp::auth::IAuth& auth);
+    void SetAuth(std::shared_ptr<mcp::auth::IAuth> auth);
 
 private:
     class Impl;

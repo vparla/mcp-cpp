@@ -479,6 +479,11 @@ mcp::async::Task<ServerCapabilities> Client::Impl::coInitialize(
     auto fut = this->transport->SendRequest(std::move(request));
     try {
         auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (response) {
+            LOG_DEBUG("Initialize response: {}", response->Serialize());
+        } else {
+            LOG_DEBUG("Initialize response: <null>");
+        }
         if (response && !response->IsError() && response->result.has_value()) {
             this->parseServerCapabilities(response->result.value());
             co_return this->serverCapabilities;

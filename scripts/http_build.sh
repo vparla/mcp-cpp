@@ -7,6 +7,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+echo "[http_build] Ensuring local base image 'mcp-cpp-build' (build target) is available..."
+docker buildx build \
+  -f Dockerfile.demo \
+  --target build \
+  --progress=plain \
+  --load \
+  -t mcp-cpp-build \
+  .
+
 echo "[http_build] Building mcp-http image using local base 'mcp-cpp-build'..."
 docker build \
   -f tests/http/Dockerfile \

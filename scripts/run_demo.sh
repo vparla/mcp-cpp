@@ -95,16 +95,52 @@ run_shm_demo() {
 run_http_demo() {
   print_banner "HTTP transport (localhost loopback)"
   local URL="http://127.0.0.1:9443"
-  "$SERVER_BIN" --transport=http --listen="$URL" 2>&2 &
+  # HTTP readiness probe: send a minimal POST with JSON body and expect any response line.
+  waitForHttp() {
+    local host="$1"; local port="$2"; local path="${3:-/mcp/rpc}"; local timeout="${4:-30}";
+    local end=$((SECONDS+timeout))
+    while (( SECONDS < end )); do
+      if { exec 3<>/dev/tcp/"$host"/"$port"; } 2>/dev/null; then
+        printf 'POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}' "$path" "$host" >&3 || true
+        if read -r -t 1 _line <&3; then
+          exec 3>&- 3<&-
+          return 0
+        fi
+        exec 3>&- 3<&-
+      fi
+      sleep 0.2
+    done
+    return 1
+  }
+  local STDIN_FIFO="/tmp/mcp_http_stdin.fifo"
+  rm -f "$STDIN_FIFO" 2>/dev/null || true
+  mkfifo "$STDIN_FIFO"
+  ( tail -f /dev/null > "$STDIN_FIFO" ) &
+  local HOLD_PID=$!
+  "$SERVER_BIN" --transport=http --listen="$URL" 0<"$STDIN_FIFO" 2>&2 &
   local SERVER_PID=$!
-  sleep 0.4
+  local hp="${URL#*://}"; local host="${hp%%:*}"; local port="${hp##*:}"
+  sleep 0.6
+  if ! waitForHttp "$host" "$port" /mcp/rpc 30; then kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+  set +e
   "$CLIENT_BIN" --transport=http --url="$URL" 2>&2
   local CLIENT_STATUS=$?
+  set -e
   if kill -0 "$SERVER_PID" 2>/dev/null; then
-    kill -TERM "$SERVER_PID" 2>/dev/null || true
-    sleep 0.2
-    kill -KILL "$SERVER_PID" 2>/dev/null || true
+    kill "$HOLD_PID" 2>/dev/null || true
+    for i in {1..10}; do
+      if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
+      sleep 0.1
+    done
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+      kill -TERM "$SERVER_PID" 2>/dev/null || true
+      sleep 0.2
+      if kill -0 "$SERVER_PID" 2>/dev/null; then
+        kill -KILL "$SERVER_PID" 2>/dev/null || true
+      fi
+    fi
     wait "$SERVER_PID" 2>/dev/null || true
+    rm -f "$STDIN_FIFO" 2>/dev/null || true
   fi
   if [[ "$CLIENT_STATUS" -eq 0 ]]; then
     echo "${C_OK}[demo][http] SUCCESS${C_RST}" >&2
@@ -115,15 +151,15 @@ run_http_demo() {
   fi
 }
 
-overall=0
-run_stdio_demo || overall=1
-run_shm_demo   || overall=1
-run_http_demo  || overall=1
-
-if [[ "$overall" -eq 0 ]]; then
-  echo "${C_OK}[demo] All transport demos succeeded${C_RST}" >&2
-else
-  echo "${C_ERR}[demo] One or more transport demos failed${C_RST}" >&2
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  overall=0
+  run_stdio_demo || overall=1
+  run_shm_demo   || overall=1
+  run_http_demo  || overall=1
+  if [[ "$overall" -eq 0 ]]; then
+    echo "${C_OK}[demo] All transport demos succeeded${C_RST}" >&2
+  else
+    echo "${C_ERR}[demo] One or more transport demos failed${C_RST}" >&2
+  fi
+  exit "$overall"
 fi
-
-exit "$overall"

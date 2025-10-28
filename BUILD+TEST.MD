@@ -76,6 +76,83 @@ Tips:
 - Add new tests by updating `tests/CMakeLists.txt` and adding `TEST(...)` cases.
 - Note: when writing code that directly uses the in-memory transport, include `mcp/InMemoryTransport.hpp`. For StdioTransport, include `mcp/StdioTransport.hpp`.
 
+## Debugging with GDB (Docker-first)
+
+Use a Docker-first workflow to capture backtraces without installing native tools on the host.
+
+- Build the compiled image (examples + tests)
+  - Windows (PowerShell via WSL2 Ubuntu):
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
+  ```
+
+- Create a debug image with GDB preinstalled
+  - Windows (PowerShell via WSL2 Ubuntu):
+  ```powershell
+  wsl -d Ubuntu -- bash -lc 'cat > /tmp/Dockerfile.mcpdbg << "EOF"\nFROM mcp-cpp-build\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends gdb && rm -rf /var/lib/apt/lists/*\nEOF\n\ndocker build -t mcp-cpp-build-dbg -f /tmp/Dockerfile.mcpdbg .'
+  ```
+
+- Run a targeted test inside the debug image (optional quick check)
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -t --ipc=host mcp-cpp-build-dbg bash -lc 'cd /src && CTEST_OUTPUT_ON_FAILURE=1 ctest --test-dir build -R TransportDemo.Run -VV --progress --timeout 180'"
+  ```
+
+- Dump a backtrace for the HTTP demo (prints in your terminal)
+  - Launches the server in the background and runs the client under GDB with a script that prints the full stack on faults.
+  ```powershell
+  wsl -d Ubuntu -- bash -lc 'docker run --rm -it --ipc=host --cap-add=SYS_PTRACE --security-opt seccomp=unconfined mcp-cpp-build-dbg bash -lc "set -euo pipefail; printf \\\"set pagination off\\nhandle SIGPIPE nostop noprint pass\\nhandle SIGSEGV stop print pass\\nrun\\nbt full\\nthread apply all bt full\\nquit\\n\\\" > /tmp/gdb.cmd; /src/build/examples/mcp_server/mcp_server --transport=http --listen=http://127.0.0.1:9443 >/dev/null 2>&1 & spid=\\\$!; sleep 0.6; gdb -q -x /tmp/gdb.cmd --args /src/build/examples/mcp_client/mcp_client --transport=http --url=http://127.0.0.1:9443; code=\\\$?; kill -TERM \\\$spid 2>/dev/null || true; wait \\\$spid 2>/dev/null || true; exit \\\$code"'
+  ```
+
+Notes:
+- Ensure examples exist under `/src/build/examples/...` by using `Dockerfile.demo --target build` (`mcp-cpp-build`).
+- `--cap-add=SYS_PTRACE --security-opt seccomp=unconfined` lets GDB run inside Docker.
+- If prompted about debuginfod, answering `n` is fine (optional).
+
+- Debug any GoogleTest case (tests/mcp_tests)
+  - List matching tests:
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -N -R ClientPaging'"
+  ```
+  - Run a specific test under GDB (replace the filter with your `Suite.Test`):
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -it mcp-cpp-build-dbg bash -lc 'printf \"set pagination off\nhandle SIGPIPE nostop noprint pass\nrun\nbt full\nthread apply all bt full\nquit\n\" > /tmp/gdb.cmd; gdb -q -x /tmp/gdb.cmd --args /src/build/tests/mcp_tests --gtest_filter=ClientPaging.ToolsListPaged'"
+  ```
+
+- Debug any CTest test (generic)
+  - Show the exact command CTest uses:
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -N -V -R TransportDemo.Run'"
+  ```
+  - If it invokes `mcp_tests --gtest_filter=...`, reuse the previous GoogleTest pattern.
+  - If it runs a script (e.g., `scripts/run_demo.sh`), open the script and wrap the target binary with GDB as needed (e.g., `mcp_client`, `mcp_server`), starting any prerequisites in the background.
+
+- Helper script: quick HTTP GDB session
+  - Script: `scripts/_gdb_http_debug.sh`
+  - What it does: rebuilds `mcp-cpp-build`, layers `mcp-cpp-build-dbg` with GDB, starts the HTTP server, then runs the client under GDB and prints a backtrace on faults.
+  - Usage (WSL PowerShell):
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && chmod +x scripts/_gdb_http_debug.sh && ./scripts/_gdb_http_debug.sh --no-cache --url http://127.0.0.1:9443"
+  ```
+  - Options:
+    - `--no-cache` forces fresh rebuilds of both images.
+    - `--url <http://host:port>` overrides the listen/target URL (default `http://127.0.0.1:9443`).
+
+- Optional: rebuild with symbols (RelWithDebInfo)
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -it --ipc=host mcp-cpp-build-dbg bash -lc 'set -euo pipefail; cmake -S /src -B /src/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMCP_BUILD_TESTS=ON; cmake --build /src/build -j; cd /src && CTEST_OUTPUT_ON_FAILURE=1 ctest --test-dir build -R TransportDemo.Run -VV --progress --timeout 180'"
+  ```
+
+## Notes
+- The script shows a complete test list (`ctest -N`) and then runs all tests (`ctest -VV --progress`).
+- HTTPS e2e logs from both server and client containers are streamed to the terminal.
+- Set `MCP_LOG_LEVEL=DEBUG` to increase e2e verbosity.
+
+Tips:
+- Add `--no-cache` to force a fresh test run.
+- CTest output will display pass/fail for each test. Example tests live in `tests/` (e.g., `tests/test_inmemory_transport.cpp`).
+- Add new tests by updating `tests/CMakeLists.txt` and adding `TEST(...)` cases.
+- Note: when writing code that directly uses the in-memory transport, include `mcp/InMemoryTransport.hpp`. For StdioTransport, include `mcp/StdioTransport.hpp`.
+
 ## Command variations and options (Linux/macOS and Windows via WSL)
 
 Below are commonly used Docker Buildx/CTest variants with both native (Linux/macOS) and Windows (PowerShell via WSL2 Ubuntu) forms. Substitute your WSL distro name if not `Ubuntu`.
@@ -510,16 +587,17 @@ Artifacts appear under `out/`:
 
 ## About GoogleTest usage
 
-- Integrated via CMake FetchContent in `tests/CMakeLists.txt`.
-- Not committed to the repository; fetched at configure time in the test stage.
-- Test binary is `tests/mcp_tests` inside the container; ctest discovers and runs tests.
+Notes:
+- Ensure examples exist under `/src/build/examples/...` by using `Dockerfile.demo --target build` (`mcp-cpp-build`).
+- `--cap-add=SYS_PTRACE --security-opt seccomp=unconfined` lets GDB run inside Docker.
+- If prompted about debuginfod, answering `n` is fine (optional).
 
-To add tests:
-- Create `tests/your_test.cpp` with GoogleTest `TEST(...)` cases.
-- Append the file to `add_executable(mcp_tests ...)` in `tests/CMakeLists.txt` or keep using a single test TU and add cases there.
-- Re-run the Docker test target.
+- **Optional: rebuild with symbols (RelWithDebInfo)**
+  ```powershell
+  wsl -d Ubuntu -- bash -lc "docker run --rm -it --ipc=host mcp-cpp-build-dbg bash -lc 'set -euo pipefail; cmake -S /src -B /src/build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMCP_BUILD_TESTS=ON; cmake --build /src/build -j; cd /src && CTEST_OUTPUT_ON_FAILURE=1 ctest --test-dir build -R TransportDemo.Run -VV --progress --timeout 180'"
+  ```
 
 ## Notes
-
-- All instructions above are cross-platform via Docker. No native toolchain setup is required on the host.
-- For CI/CD, reuse the same `--target test` to gate merges.
+ 
+ - All instructions above are cross-platform via Docker. No native toolchain setup is required on the host.
+ - For CI/CD, reuse the same `--target test` to gate merges.

@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     ClientFactory factory;
     Implementation info{"MCP Demo Client","1.0.0"};
     auto client = factory.CreateClient(info);
+    client->SetErrorHandler([](const std::string& err){ LOG_INFO("HTTP DEBUG: {}", err); });
 
     // Choose transport via CLI
     std::string transportKind = getArgValue(argc, argv, "--transport").value_or("stdio");

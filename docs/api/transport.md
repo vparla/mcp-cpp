@@ -174,6 +174,35 @@ Notes:
 - Secrets are not logged. Prefer environment variables or secure config handling in your process to populate `clientSecret`.
 - The token endpoint response must include `access_token` and may include `expires_in` (seconds). When absent, a default 1‑hour lifetime is assumed.
 
+#### Code-based authentication injection (IAuth)
+
+You can also inject an auth provider programmatically using `IAuth`.
+
+```cpp
+#include "mcp/HTTPTransport.hpp"
+#include "mcp/auth/BearerAuth.hpp"
+
+mcp::HTTPTransportFactory f;
+auto t = f.CreateTransport(
+  "scheme=http; host=127.0.0.1; port=8080; rpcPath=/rpc; notifyPath=/notify; auth=none"
+);
+
+auto* http = dynamic_cast<mcp::HTTPTransport*>(t.get());
+if (http) {
+  mcp::auth::BearerAuth bearer("XYZ");
+  http->SetAuth(bearer); // non-owning reference injection
+}
+```
+
+Shared ownership is supported when you want the transport to manage lifetime:
+
+```cpp
+auto auth = std::make_shared<mcp::auth::BearerAuth>("XYZ");
+http->SetAuth(auth); // shared ownership injection
+```
+
+When `SetAuth(...)` is used, it takes precedence over any `auth=` factory configuration.
+
 #### HTTP client diagnostics and debug logging
 
 The HTTP client surfaces transport‑level diagnostics via `HTTPTransport::SetErrorHandler()`. When an error handler is registered, the transport emits concise stage markers to help troubleshoot request lifecycles and shutdown behavior.
@@ -274,6 +303,20 @@ Usage examples:
 # http (single request per connection; demo acceptor)
 ./mcp_server --transport=http --listen=http://127.0.0.1:9443
 ./mcp_client --transport=http --url=http://127.0.0.1:9443
+```
+
+WSL on Windows (PowerShell):
+
+```powershell
+# Run the same commands via WSL (assumes binaries are in the current working directory inside WSL)
+wsl -d Ubuntu -- bash -lc "./mcp_server --transport=stdio --stdiocfg=\"timeout_ms=30000\""
+wsl -d Ubuntu -- bash -lc "./mcp_client --transport=stdio --stdiocfg=\"timeout_ms=30000\""
+
+wsl -d Ubuntu -- bash -lc "./mcp_server --transport=shm --channel=mcp-shm"
+wsl -d Ubuntu -- bash -lc "./mcp_client --transport=shm --channel=mcp-shm"
+
+wsl -d Ubuntu -- bash -lc "./mcp_server --transport=http --listen=http://127.0.0.1:9443"
+wsl -d Ubuntu -- bash -lc "./mcp_client --transport=http --url=http://127.0.0.1:9443"
 ```
 
 ### Hardening behaviors (stdio)
