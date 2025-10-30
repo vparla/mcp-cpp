@@ -23,8 +23,9 @@
 #include <boost/beast/http.hpp>
 
 #include "logging/Logger.h"
-#include "mcp/JSONRPCTypes.h"
 #include "mcp/HTTPServer.hpp"
+#include "mcp/JSONRPCTypes.h"
+#include "mcp/auth/ServerAuth.hpp"
 
 #include <openssl/ssl.h>
 
@@ -47,6 +48,11 @@ public:
     ITransport::RequestHandler requestHandler;
     ITransport::NotificationHandler notificationHandler;
     ITransport::ErrorHandler errorHandler;
+
+    // Optional server-side Bearer authentication
+    mcp::auth::ITokenVerifier* tokenVerifier{nullptr};
+    mcp::auth::RequireBearerTokenOptions bearerOptions{};
+    bool bearerAuthEnabled{false};
 
     std::promise<void> listenReadyPromise;
     std::atomic<bool> listenReadySignaled{false};
@@ -161,6 +167,100 @@ public:
         co_return;
     }
 
+    //==========================================================================================================
+    // enforceAuthAndScope
+    // Purpose: Enforce optional Bearer authentication. On failure, populate 'res' with proper status,
+    //          body, and WWW-Authenticate header when configured. Returns true when authorized.
+    //==========================================================================================================
+    bool enforceAuthAndScope(const http::request<http::string_body>& req,
+                             http::response<http::string_body>& res,
+                             mcp::auth::TokenInfo& outInfo) {
+        if (!bearerAuthEnabled || tokenVerifier == nullptr) {
+            return true;
+        }
+        const auto h = req[http::field::authorization];
+        const std::string authHeader = std::string(h);
+        auto r = mcp::auth::CheckBearerAuth(authHeader, *tokenVerifier, bearerOptions, outInfo);
+        if (r.ok) {
+            return true;
+        }
+        if (r.httpStatus == 403) {
+            res.result(http::status::forbidden);
+        } else {
+            res.result(http::status::unauthorized);
+        }
+        if (r.includeWWWAuthenticate && !bearerOptions.resourceMetadataUrl.empty()) {
+            const std::string www = std::string("Bearer resource_metadata=") + bearerOptions.resourceMetadataUrl;
+            res.set(http::field::www_authenticate, www);
+        }
+        res.body() = std::string("{\"error\":\"") + r.errorMessage + std::string("\"}");
+        res.prepare_payload();
+        return false;
+    }
+
+    //==========================================================================================================
+    // handleRpc
+    // Purpose: Handle POST to rpcPath with optional Bearer enforcement and request handler dispatch.
+    //==========================================================================================================
+    http::response<http::string_body> handleRpc(const http::request<http::string_body>& req) {
+        http::response<http::string_body> res{http::status::ok, req.version()};
+        res.set(http::field::content_type, "application/json");
+        res.keep_alive(false);
+        mcp::auth::TokenInfo info;
+        if (!enforceAuthAndScope(req, res, info)) {
+            return res;
+        }
+        mcp::auth::TokenInfoScope tokenScope(bearerAuthEnabled ? &info : nullptr);
+        JSONRPCRequest rpc;
+        if (!rpc.Deserialize(req.body())) {
+            auto err = CreateErrorResponse(nullptr, JSONRPCErrorCodes::ParseError, "Parse error");
+            res.body() = err->Serialize(); res.prepare_payload();
+            return res;
+        }
+        std::unique_ptr<JSONRPCResponse> out;
+        try {
+            out = requestHandler ? requestHandler(rpc) : nullptr;
+        } catch (const std::exception& e) {
+            auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
+            er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what());
+            out = std::move(er);
+        }
+        if (!out) {
+            auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
+            er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "No response from handler");
+            out = std::move(er);
+        }
+        res.body() = out->Serialize(); res.prepare_payload();
+        return res;
+    }
+
+    //==========================================================================================================
+    // handleNotify
+    // Purpose: Handle POST to notifyPath with optional Bearer enforcement and notification dispatch.
+    //==========================================================================================================
+    http::response<http::string_body> handleNotify(const http::request<http::string_body>& req) {
+        http::response<http::string_body> res{http::status::ok, req.version()};
+        res.set(http::field::content_type, "application/json");
+        res.keep_alive(false);
+        mcp::auth::TokenInfo info;
+        if (!enforceAuthAndScope(req, res, info)) {
+            return res;
+        }
+        mcp::auth::TokenInfoScope tokenScope(bearerAuthEnabled ? &info : nullptr);
+        JSONRPCNotification note;
+        if (!note.Deserialize(req.body())) {
+            auto er = CreateErrorResponse(nullptr, JSONRPCErrorCodes::InvalidRequest, "Invalid notification");
+            res.body() = er->Serialize(); res.prepare_payload();
+            return res;
+        }
+        if (notificationHandler) {
+            try { notificationHandler(std::make_unique<JSONRPCNotification>(std::move(note))); }
+            catch (const std::exception& e) { setError(std::string("Notification handler error: ") + e.what()); }
+        }
+        res.body() = std::string("{}"); res.prepare_payload();
+        return res;
+    }
+
     http::response<http::string_body> makeResponse(const http::request<http::string_body>& req) {
         http::response<http::string_body> res{http::status::ok, req.version()};
         res.set(http::field::content_type, "application/json");
@@ -175,42 +275,11 @@ public:
 
         const std::string target = std::string(req.target());
         if (target == opts.rpcPath) {
-            JSONRPCRequest rpc;
-            if (!rpc.Deserialize(req.body())) {
-                auto err = CreateErrorResponse(nullptr, JSONRPCErrorCodes::ParseError, "Parse error");
-                res.body() = err->Serialize(); res.prepare_payload();
-                return res;
-            }
-            std::unique_ptr<JSONRPCResponse> out;
-            try {
-                out = requestHandler ? requestHandler(rpc) : nullptr;
-            } catch (const std::exception& e) {
-                auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
-                er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what());
-                out = std::move(er);
-            }
-            if (!out) {
-                auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
-                er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "No response from handler");
-                out = std::move(er);
-            }
-            res.body() = out->Serialize(); res.prepare_payload();
-            return res;
+            return handleRpc(req);
         }
 
         if (target == opts.notifyPath) {
-            JSONRPCNotification note;
-            if (!note.Deserialize(req.body())) {
-                auto er = CreateErrorResponse(nullptr, JSONRPCErrorCodes::InvalidRequest, "Invalid notification");
-                res.body() = er->Serialize(); res.prepare_payload();
-                return res;
-            }
-            if (notificationHandler) {
-                try { notificationHandler(std::make_unique<JSONRPCNotification>(std::move(note))); }
-                catch (const std::exception& e) { setError(std::string("Notification handler error: ") + e.what()); }
-            }
-            res.body() = std::string("{}"); res.prepare_payload();
-            return res;
+            return handleNotify(req);
         }
 
         res.result(http::status::not_found);
@@ -341,6 +410,13 @@ void HTTPServer::SetNotificationHandler(ITransport::NotificationHandler handler)
 void HTTPServer::SetErrorHandler(ITransport::ErrorHandler handler) {
       pImpl->errorHandler = std::move(handler);
  }
+
+void HTTPServer::SetBearerAuth(mcp::auth::ITokenVerifier& verifier,
+                       const mcp::auth::RequireBearerTokenOptions& opts) {
+    pImpl->tokenVerifier = &verifier;
+    pImpl->bearerOptions = opts;
+    pImpl->bearerAuthEnabled = true;
+}
 
 std::unique_ptr<ITransportAcceptor> HTTPServerFactory::CreateTransportAcceptor(const std::string& config) {
     HTTPServer::Options opts;

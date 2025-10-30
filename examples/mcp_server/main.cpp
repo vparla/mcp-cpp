@@ -11,6 +11,7 @@
 #include "mcp/SharedMemoryTransport.hpp"
 #include "mcp/HTTPServer.hpp"
 #include "mcp/Protocol.h"
+#include "mcp/auth/ServerAuth.hpp"
 #include <iostream>
 #include <cstddef>
 #include <chrono>
@@ -139,6 +140,69 @@ int main(int argc, char** argv) {
         LOG_INFO("HTTPServer listening at: {} (rpcPath=/mcp/rpc, notifyPath=/mcp/notify)", listen);
         HTTPServerFactory hf;
         auto acceptor = hf.CreateTransportAcceptor(listen);
+
+        // Optional: Configure server-side Bearer auth for demo via environment variables
+        // MCP_HTTP_REQUIRE_BEARER=1 enables; MCP_HTTP_DEMO_TOKEN sets accepted token; 
+        // MCP_HTTP_RESOURCE_METADATA_URL sets metadata URL; MCP_HTTP_REQUIRED_SCOPES is comma-separated list (e.g., "s1,s2").
+        {
+            std::string req = GetEnvOrDefault("MCP_HTTP_REQUIRE_BEARER", "0");
+            if (req == std::string("1")) {
+                // Downcast to HTTPServer to access SetBearerAuth
+                auto* httpSrv = dynamic_cast<HTTPServer*>(acceptor.get());
+                if (httpSrv != nullptr) {
+                    struct DemoTokenVerifier : public mcp::auth::ITokenVerifier {
+                        std::string expected;
+                        std::vector<std::string> demoScopes;
+                        bool Verify(const std::string& token, mcp::auth::TokenInfo& outInfo, std::string& errorMessage) override {
+                            if (token != expected) {
+                                errorMessage = std::string("invalid token");
+                                return false;
+                            }
+                            outInfo.scopes = demoScopes;
+                            outInfo.expiration = std::chrono::system_clock::now() + std::chrono::minutes(5);
+                            return true;
+                        }
+                    };
+                    static DemoTokenVerifier verifier;
+                    verifier.expected = GetEnvOrDefault("MCP_HTTP_DEMO_TOKEN", "demo");
+                    // Default demo scopes allow common checks; adjustable via MCP_HTTP_DEMO_SCOPES
+                    std::string ds = GetEnvOrDefault("MCP_HTTP_DEMO_SCOPES", "s1,s2");
+                    verifier.demoScopes.clear();
+                    {
+                        std::size_t start = 0;
+                        while (start <= ds.size()) {
+                            std::size_t comma = ds.find(',', start);
+                            std::string item = (comma == std::string::npos) ? ds.substr(start) : ds.substr(start, comma - start);
+                            if (!item.empty()) { verifier.demoScopes.push_back(item); }
+                            if (comma == std::string::npos) { break; }
+                            start = comma + 1;
+                        }
+                    }
+                    mcp::auth::RequireBearerTokenOptions aopts;
+                    aopts.resourceMetadataUrl = GetEnvOrDefault("MCP_HTTP_RESOURCE_METADATA_URL", "");
+                    {
+                        std::string rs = GetEnvOrDefault("MCP_HTTP_REQUIRED_SCOPES", "");
+                        aopts.requiredScopes.clear();
+                        if (!rs.empty()) {
+                            std::size_t start = 0;
+                            while (start <= rs.size()) {
+                                std::size_t comma = rs.find(',', start);
+                                std::string item = (comma == std::string::npos) ? rs.substr(start) : rs.substr(start, comma - start);
+                                if (!item.empty()) { aopts.requiredScopes.push_back(item); }
+                                if (comma == std::string::npos) { break; }
+                                start = comma + 1;
+                            }
+                        }
+                    }
+                    httpSrv->SetBearerAuth(verifier, aopts);
+                    LOG_INFO("HTTP Bearer auth enabled for demo (requiredScopes={} resource_metadata={})",
+                             aopts.requiredScopes.size(), aopts.resourceMetadataUrl);
+                } else {
+                    LOG_WARN("HTTP Bearer auth requested but acceptor is not HTTPServer");
+                }
+            }
+        }
+        
         acceptor->SetRequestHandler([&server](const JSONRPCRequest& req) {
             return server->HandleJSONRPC(req);
         });

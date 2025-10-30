@@ -13,6 +13,7 @@
 #include <memory>
 #include "mcp/Transport.h"
 #include "mcp/JSONRPCTypes.h"
+#include "mcp/auth/ServerAuth.hpp"
 
 namespace mcp {
 
@@ -77,6 +78,23 @@ namespace mcp {
     //   handler: Callback invoked with error strings.
     //==========================================================================================================
     void SetErrorHandler(ITransport::ErrorHandler handler) override;
+
+    //==========================================================================================================
+    // SetBearerAuth
+    // Purpose: Configure optional server-side Bearer authentication for HTTP requests.
+    // Notes:
+    //   - Non-owning reference to an ITokenVerifier implementation; caller must ensure lifetime spans server use.
+    //   - When configured, incoming requests to rpcPath/notifyPath must include a valid
+    //     Authorization: Bearer <token> header. On failure, the server responds with 401/403 and
+    //     includes a WWW-Authenticate: Bearer resource_metadata=<url> header when a URL is provided.
+    //   - On success, the verified TokenInfo is made available for the duration of request handling
+    //     via mcp::auth::CurrentTokenInfo().
+    // Args:
+    //   verifier: Token verifier to validate bearer tokens.
+    //   opts: Required scopes and resource metadata URL for WWW-Authenticate.
+    //==========================================================================================================
+    void SetBearerAuth(mcp::auth::ITokenVerifier& verifier,
+                       const mcp::auth::RequireBearerTokenOptions& opts);
 
 private:
     class Impl;

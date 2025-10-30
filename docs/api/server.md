@@ -123,6 +123,102 @@ Notes:
 - Client parsing: handled in [src/mcp/Client.cpp](../../src/mcp/Client.cpp) `parseServerCapabilities()`.
 - Tests: [tests/test_capabilities_logging.cpp](../../tests/test_capabilities_logging.cpp).
 
+## Server-side Bearer authentication (HTTP acceptor)
+
+Header: [include/mcp/auth/ServerAuth.hpp](../../include/mcp/auth/ServerAuth.hpp)
+
+The HTTP server acceptor can enforce Bearer authentication for incoming POSTs to `rpcPath` and `notifyPath` when explicitly enabled.
+
+- API
+  - `void HTTPServer::SetBearerAuth(mcp::auth::ITokenVerifier& verifier, const mcp::auth::RequireBearerTokenOptions& opts)`
+  - `mcp::auth::ITokenVerifier` verifies the bearer token and populates `TokenInfo` (scopes, expiration, extra).
+  - `mcp::auth::RequireBearerTokenOptions` controls enforcement:
+    - `resourceMetadataUrl`: included in `WWW-Authenticate: Bearer resource_metadata=<url>` on 401/403.
+    - `requiredScopes`: all listed scopes must be present; otherwise 403.
+
+- Behavior
+  - Authorization header must be `Authorization: Bearer <token>` (scheme case-insensitive).
+  - On missing/invalid token → 401 Unauthorized.
+  - On missing expiration or expired token → 401 Unauthorized.
+  - On insufficient scope → 403 Forbidden.
+  - When `resourceMetadataUrl` is provided, responses include `WWW-Authenticate: Bearer resource_metadata=<url>`.
+  - On success, the verified token is available during handler execution via `mcp::auth::currentTokenInfo()`.
+  - When `SetBearerAuth(...)` is not called, no authentication is enforced (backward compatible).
+
+- Example (bridge to Server::HandleJSONRPC)
+
+```cpp
+#include "mcp/HTTPServer.hpp"
+#include "mcp/Server.h"
+#include "mcp/auth/ServerAuth.hpp"
+
+mcp::ServerFactory sf;
+auto server = sf.CreateServer({"Demo","1.0.0"});
+
+mcp::HTTPServerFactory hf;
+auto acceptor = hf.CreateTransportAcceptor("http://127.0.0.1:9443");
+
+struct MyVerifier : mcp::auth::ITokenVerifier {
+  bool Verify(const std::string& token, mcp::auth::TokenInfo& out, std::string& err) override {
+    if (token != "demo") { err = "invalid token"; return false; }
+    out.scopes = {"tools:invoke"};
+    out.expiration = std::chrono::system_clock::now() + std::chrono::minutes(5);
+    return true;
+  }
+} verifier;
+
+mcp::auth::RequireBearerTokenOptions opts;
+opts.resourceMetadataUrl = "https://auth.example.com/rs";
+opts.requiredScopes = {"tools:invoke"};
+
+auto* http = dynamic_cast<mcp::HTTPServer*>(acceptor.get());
+if (http) { http->SetBearerAuth(verifier, opts); }
+
+acceptor->SetRequestHandler([&server](const mcp::JSONRPCRequest& req){ return server->HandleJSONRPC(req); });
+acceptor->Start().get();
+```
+
+- Accessing token info in handlers
+  - Inside server/tool handlers, use `mcp::auth::currentTokenInfo()` to read the request’s token metadata.
+
+- Demo (run_demo.sh)
+  - The demo wiring supports environment toggles to exercise this flow end-to-end:
+    - `MCP_HTTP_REQUIRE_BEARER=1` — enable server-side Bearer for the HTTP demo.
+    - `MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs` — advertised in `WWW-Authenticate`.
+    - `MCP_HTTP_DEMO_TOKEN=demo` — client token to accept (demo verifier).
+    - `MCP_HTTP_DEMO_SCOPES=s1,s2` — scopes attached by the demo verifier (default `s1,s2`).
+    - `MCP_HTTP_REQUIRED_SCOPES=s1` — required scopes to enforce (optional).
+  - The CTest target `HTTPDemo.BearerAuth` first verifies an unauthorized probe (expects 401 + `WWW-Authenticate`) and then runs the client with a bearer token to observe a successful 200 path.
+
+### Flow (ASCII)
+
+```
++---------+                                            +------------------+
+| Client  |                                            | HTTPServer       |
++---------+                                            +------------------+
+    |  POST /mcp/rpc (no Authorization)                         |
+    |---------------------------------------------------------->|
+    |                                                           |
+    |<----------------------------------------------------------|
+    | 401 Unauthorized                                          |
+    | WWW-Authenticate: Bearer resource_metadata=<url>          |
+    |                                                           |
+    |  POST /mcp/rpc                                            |
+    |(Authorization: Bearer <token with bad scope>)             |
+    |---------------------------------------------------------->|
+    |                                                           |
+    |<----------------------------------------------------------|
+    | 403 Forbidden                                             |
+    | WWW-Authenticate: Bearer resource_metadata=<url>          |
+    |                                                           |
+    |  POST /mcp/rpc                                            |
+    |(Authorization: Bearer <valid token>)                      |
+    |---------------------------------------------------------->|
+    |                                                           |
+    |<----------------------------------------------------------|
+    | 200 OK (JSON-RPC response)                                |
+```
+
 ## Tools
 - void RegisterTool(const std::string& name, ToolHandler handler)
 - void RegisterTool(const Tool& tool, ToolHandler handler)

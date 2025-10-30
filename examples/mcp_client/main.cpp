@@ -95,6 +95,12 @@ int main(int argc, char** argv) {
         HTTPTransportFactory f;
         std::string url = getArgValue(argc, argv, "--url").value_or("http://127.0.0.1:9443");
         std::string cfg = parseHttpUrlToConfig(url);
+        if (auto extra = getArgValue(argc, argv, "--httpcfg"); extra.has_value()) {
+            if (!extra->empty()) {
+                if (!cfg.empty() && cfg.back() != ';') { cfg += "; "; }
+                cfg += *extra;
+            }
+        }
         transport = f.CreateTransport(cfg);
     } else {
         LOG_ERROR("Unknown --transport option: {} (expected stdio|shm|http)", transportKind);

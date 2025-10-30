@@ -174,6 +174,45 @@ Notes:
 - Secrets are not logged. Prefer environment variables or secure config handling in your process to populate `clientSecret`.
 - The token endpoint response must include `access_token` and may include `expires_in` (seconds). When absent, a default 1‑hour lifetime is assumed.
 
+##### Flow diagrams (ASCII)
+
+- Static Bearer header
+
+```
++-----------+                                      +------------------+
+| Client    |                                      | Resource Server  |
++-----------+                                      +------------------+
+    | Build HTTP request (JSON-RPC over HTTP)
+    | Authorization: Bearer <token>
+    |---------------------------------------------->
+                                                   | POST /mcp/rpc
+                                                   |
+                                                   | 200 OK / Error
+    |<----------------------------------------------
+```
+
+- OAuth 2.1 Client Credentials grant (token fetch + use)
+
+```
++-----------+               +--------------+                 +------------------+
+| Client    |               | Auth Server  |                 | Resource Server  |
++-----------+               +--------------+                 +------------------+
+    | POST /oauth2/token 
+    | (grant_type=client_credentials, 
+    |  client_id, client_secret, scope?)
+    |-------------------------->|
+                                | 
+                                | 200 OK {access_token, expires_in, ...}
+                                |<---------------------------------|
+    | Build HTTP request (JSON-RPC over HTTP)                      |
+    | Authorization: Bearer <access_token>                         |
+    |------------------------------------------------------------->|
+                                                                   | POST /mcp/rpc
+                                                                   |
+                                                                   | 200 OK / Error
+    |<-------------------------------------------------------------|
+```
+
 #### Code-based authentication injection (IAuth)
 
 You can also inject an auth provider programmatically using `IAuth`.

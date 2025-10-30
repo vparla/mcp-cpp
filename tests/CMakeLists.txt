@@ -63,6 +63,7 @@ add_executable(mcp_tests
   test_validation_strict.cpp
   test_shared_memory_transport.cpp
   test_http_auth.cpp
+  test_http_server_bearer.cpp
   )
 
 target_link_libraries(mcp_tests
@@ -108,6 +109,11 @@ if (EXISTS "${RUN_DEMO_SH}" AND EXISTS "${STDIO_HARDENING_SH}")
   add_test(
     NAME StdioHardening.BadContentLength
     COMMAND /bin/bash -lc "SERVER_BIN=/src/build/examples/mcp_server/mcp_server bash ${STDIO_HARDENING_SH} badlength"
+  )
+  # HTTP Bearer auth demo: unauthorized probe (401 + WWW-Authenticate) then authorized client (200)
+  add_test(
+    NAME HTTPDemo.BearerAuth
+    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO MCP_HTTP_REQUIRE_BEARER=1 MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs MCP_HTTP_DEMO_TOKEN=demo SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
   )
 else()
   message(STATUS "Scripts not found; skipping stdio integration/hardening script-based tests")
