@@ -1,0 +1,50 @@
+#==========================================================================================================
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Vinny Parla
+# File: .github/workflows/bearer-auth-demo.yml
+# Purpose: CI gate for HTTP Bearer auth demo using Docker-first test image
+#==========================================================================================================
+name: CI - HTTP Bearer Auth Demo
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bearer-demo:
+    name: HTTPDemo.BearerAuth (Docker-first)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image (Dockerfile.demo --target=test)
+        run: |
+          docker buildx build \
+            -f Dockerfile.demo \
+            --target test \
+            --progress=plain \
+            --load \
+            -t mcp-cpp-test \
+            .
+
+      - name: Run Bearer demo test (401 -> 200)
+        run: |
+          docker run --rm --ipc=host \
+            -e MCP_LOG_LEVEL=INFO \
+            -e MCP_HTTP_REQUIRE_BEARER=1 \
+            -e MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs \
+            -e MCP_HTTP_DEMO_TOKEN=demo \
+            mcp-cpp-test \
+            ctest --test-dir build -VV --progress -R HTTPDemo.BearerAuth
