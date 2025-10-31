@@ -113,8 +113,16 @@ if (EXISTS "${RUN_DEMO_SH}" AND EXISTS "${STDIO_HARDENING_SH}")
   # HTTP Bearer auth demo: unauthorized probe (401 + WWW-Authenticate) then authorized client (200)
   add_test(
     NAME HTTPDemo.BearerAuth
-    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO MCP_HTTP_REQUIRE_BEARER=1 MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs MCP_HTTP_DEMO_TOKEN=demo SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
+    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO MCP_HTTP_PORT=9443 MCP_HTTP_REQUIRE_BEARER=1 MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs MCP_HTTP_DEMO_TOKEN=demo SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
   )
+  set_tests_properties(HTTPDemo.BearerAuth PROPERTIES RUN_SERIAL ON)
+
+  # HTTP Bearer auth demo: authorized requests with insufficient scopes => 403 + WWW-Authenticate (rpc + notify)
+  add_test(
+    NAME HTTPDemo.BearerAuth.Forbidden
+    COMMAND /bin/bash -lc "MCP_LOG_LEVEL=INFO MCP_HTTP_PORT=9444 MCP_HTTP_REQUIRE_BEARER=1 MCP_HTTP_EXPECT_FORBIDDEN=1 MCP_HTTP_RESOURCE_METADATA_URL=https://auth.example.com/rs MCP_HTTP_DEMO_TOKEN=demo MCP_HTTP_REQUIRED_SCOPES=need SERVER_BIN=/src/build/examples/mcp_server/mcp_server CLIENT_BIN=/src/build/examples/mcp_client/mcp_client bash ${RUN_DEMO_SH}"
+  )
+  set_tests_properties(HTTPDemo.BearerAuth.Forbidden PROPERTIES RUN_SERIAL ON)
 else()
   message(STATUS "Scripts not found; skipping stdio integration/hardening script-based tests")
 endif()

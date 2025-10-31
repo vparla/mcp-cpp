@@ -206,6 +206,38 @@ wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src &&
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ClientCache --output-on-failure'"
 ```
 
+#### Bearer demo tests (HTTP)
+
+- Build the test image (includes examples + CTest):
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+```
+
+- Run the Bearer demo (401 → 200) on port 9443 with anchored regex and `-j1`:
+```powershell
+wsl -d Ubuntu -- bash -lc 'docker run --rm --ipc=host mcp-cpp-test ctest --test-dir build -VV --progress -j1 -R "^HTTPDemo\\.BearerAuth$"'
+```
+
+- Run the Forbidden demo (403 insufficient scope) on port 9444:
+```powershell
+wsl -d Ubuntu -- bash -lc 'docker run --rm --ipc=host mcp-cpp-test ctest --test-dir build -VV --progress -j1 -R "^HTTPDemo\\.BearerAuth\\.Forbidden$"'
+```
+
+- Run both demos in a single invocation (serialized):
+```powershell
+wsl -d Ubuntu -- bash -lc 'docker run --rm --ipc=host mcp-cpp-test ctest --test-dir build -VV --progress -j1 -R "HTTPDemo\\.BearerAuth(\\.Forbidden)?$"'
+```
+
+Notes:
+- Tests assign distinct ports via env: `MCP_HTTP_PORT=9443` (Authorized) and `MCP_HTTP_PORT=9444` (Forbidden). No additional setup needed.
+- The demo script supports `MCP_HTTP_EXPECT_FORBIDDEN=1` internally for the 403 path; the CTest wiring sets it for you.
+- The script also uses a unique per-run shared-memory channel; optionally override with `MCP_SHM_CHANNEL`.
+
+Optional validation of SHM uniqueness (run two demos concurrently):
+```powershell
+wsl -d Ubuntu -- bash -lc 'docker run --rm --ipc=host mcp-cpp-test ctest --test-dir build -VV --progress -R "^TransportDemo\\.Run$" & docker run --rm --ipc=host mcp-cpp-test ctest --test-dir build -VV --progress -R "^TransportDemo\\.Run$" & wait'
+```
+
 #### Shared-memory transport in Docker (host IPC recommended)
 
 `SharedMemoryTransport` uses Boost.Interprocess `message_queue` (POSIX mqueues). The most portable way to expose mqueues inside Docker is to use the host IPC namespace.

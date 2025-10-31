@@ -48,3 +48,10 @@ jobs:
             -e MCP_HTTP_DEMO_TOKEN=demo \
             mcp-cpp-test \
             ctest --test-dir build -VV --progress -R HTTPDemo.BearerAuth
+
+      - name: Run Bearer demo forbidden test (403 insufficient scope)
+        run: |
+          docker run --rm --ipc=host \
+            -e MCP_HTTP_PORT=9444 \
+            mcp-cpp-test \
+            ctest --test-dir build -VV --progress -R HTTPDemo.BearerAuth.Forbidden

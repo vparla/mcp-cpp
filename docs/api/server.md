@@ -125,6 +125,8 @@ Notes:
 
 ## Server-side Bearer authentication (HTTP acceptor)
 
+See also: [Authentication](./auth.md) for consolidated flows, demos, and client-side OAuth 2.1.
+
 Header: [include/mcp/auth/ServerAuth.hpp](../../include/mcp/auth/ServerAuth.hpp)
 
 The HTTP server acceptor can enforce Bearer authentication for incoming POSTs to `rpcPath` and `notifyPath` when explicitly enabled.
@@ -188,6 +190,9 @@ acceptor->Start().get();
     - `MCP_HTTP_DEMO_TOKEN=demo` — client token to accept (demo verifier).
     - `MCP_HTTP_DEMO_SCOPES=s1,s2` — scopes attached by the demo verifier (default `s1,s2`).
     - `MCP_HTTP_REQUIRED_SCOPES=s1` — required scopes to enforce (optional).
+    - `MCP_HTTP_PORT=9443` — HTTP listen port for the demo server (default `9443`). Tests assign `9443` and `9444` to different scenarios.
+    - `MCP_HTTP_EXPECT_FORBIDDEN=1` — when set, the authorized probes expect `403` (insufficient scope) with `WWW-Authenticate`.
+    - `MCP_SHM_CHANNEL=<name>` — overrides the shared‑memory demo channel (by default a unique per‑run channel is used).
   - The CTest target `HTTPDemo.BearerAuth` first verifies an unauthorized probe (expects 401 + `WWW-Authenticate`) and then runs the client with a bearer token to observe a successful 200 path.
 
 ### Flow (ASCII)

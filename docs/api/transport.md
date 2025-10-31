@@ -143,12 +143,14 @@ auto t = f.CreateTransport("scheme=http; host=127.0.0.1; port=9443; rpcPath=/mcp
 
 Optional authentication for the HTTP client transport is supported.
 
+See also: [Authentication](./auth.md) for flows, demos, and server-side Bearer enforcement.
+
 - Config keys (semicolon‑delimited `key=value`):
   - `auth` — `none` (default) | `bearer` | `oauth2`
   - `bearerToken` or `token` — static bearer token when `auth=bearer`
-  - `oauthUrl` or `oauthTokenUrl` — OAuth2 token endpoint URL (e.g., `https://auth.example.com/oauth2/token`)
-  - `clientId` — OAuth2 client id (client‑credentials grant)
-  - `clientSecret` — OAuth2 client secret (client‑credentials grant)
+  - `oauthUrl` or `oauthTokenUrl` — OAuth 2.1 token endpoint URL (e.g., `https://auth.example.com/oauth2/token`)
+  - `clientId` — OAuth 2.1 client id (client‑credentials grant)
+  - `clientSecret` — OAuth 2.1 client secret (client‑credentials grant)
   - `scope` — optional space‑delimited scopes
   - `tokenRefreshSkewSeconds` or `tokenSkew` — pre‑expiry refresh skew (seconds, default 60)
 
@@ -161,7 +163,7 @@ auto t1 = f.CreateTransport(
   " auth=bearer; bearerToken=XYZ"
 );
 
-// OAuth2 client‑credentials (token cached and refreshed proactively)
+// OAuth 2.1 client‑credentials (token cached and refreshed proactively)
 auto t2 = f.CreateTransport(
   "scheme=https; host=api.example.com; port=443; rpcPath=/mcp/rpc; notifyPath=/mcp/notify;"
   " auth=oauth2; oauthUrl=https://auth.example.com/oauth2/token; clientId=myid; clientSecret=mysecret; scope=a b c; tokenSkew=60"
@@ -173,45 +175,6 @@ Notes:
 - HTTPS uses TLS 1.3 and hostname verification (SNI) by default, sharing the same trust configuration as normal requests.
 - Secrets are not logged. Prefer environment variables or secure config handling in your process to populate `clientSecret`.
 - The token endpoint response must include `access_token` and may include `expires_in` (seconds). When absent, a default 1‑hour lifetime is assumed.
-
-##### Flow diagrams (ASCII)
-
-- Static Bearer header
-
-```
-+-----------+                                      +------------------+
-| Client    |                                      | Resource Server  |
-+-----------+                                      +------------------+
-    | Build HTTP request (JSON-RPC over HTTP)
-    | Authorization: Bearer <token>
-    |---------------------------------------------->
-                                                   | POST /mcp/rpc
-                                                   |
-                                                   | 200 OK / Error
-    |<----------------------------------------------
-```
-
-- OAuth 2.1 Client Credentials grant (token fetch + use)
-
-```
-+-----------+               +--------------+                 +------------------+
-| Client    |               | Auth Server  |                 | Resource Server  |
-+-----------+               +--------------+                 +------------------+
-    | POST /oauth2/token 
-    | (grant_type=client_credentials, 
-    |  client_id, client_secret, scope?)
-    |-------------------------->|
-                                | 
-                                | 200 OK {access_token, expires_in, ...}
-                                |<---------------------------------|
-    | Build HTTP request (JSON-RPC over HTTP)                      |
-    | Authorization: Bearer <access_token>                         |
-    |------------------------------------------------------------->|
-                                                                   | POST /mcp/rpc
-                                                                   |
-                                                                   | 200 OK / Error
-    |<-------------------------------------------------------------|
-```
 
 #### Code-based authentication injection (IAuth)
 

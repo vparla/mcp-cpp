@@ -15,7 +15,8 @@ Contents:
 - Build & Test: see [BUILD+TEST.MD](../BUILD+TEST.MD)
 - API Overview
  - Transports (factory + acceptor + demo CLI): see [docs/api/transport.md](./api/transport.md)
-  - HTTP Authentication (Bearer/OAuth2): see [docs/api/transport.md#httphttps-authentication](./api/transport.md#httphttps-authentication)
+  - HTTP Authentication (Bearer/OAuth 2.1): see [docs/api/transport.md#httphttps-authentication](./api/transport.md#httphttps-authentication)
+  - Authentication overview: see [docs/api/auth.md](./api/auth.md)
 - Resource Subscriptions (Client API): see [README.md#resource-subscriptions](../README.md#resource-subscriptions)
  - Paging (Client API): see [README.md#paging](../README.md#paging)
  - Server-side Sampling (Server API): see [README.md#server-side-sampling](../README.md#server-side-sampling)
@@ -59,6 +60,7 @@ Detailed per-interface API documentation:
 - Client API: [docs/api/client.md](./api/client.md)
 - Server API: [docs/api/server.md](./api/server.md)
 - Transport API: [docs/api/transport.md](./api/transport.md)
+ - Authentication: [docs/api/auth.md](./api/auth.md)
 
 ## Experimental capabilities
 

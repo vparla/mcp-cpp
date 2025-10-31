@@ -5,6 +5,16 @@
 # Purpose: Demo runner: exercises stdio, shared-memory, and HTTP transports in succession
 set -euo pipefail
 
+# Global cleanup trap for per-run temp directories
+TMP_DIRS=()
+cleanup_all() {
+  for d in "${TMP_DIRS[@]:-}"; do
+    rm -f "$d"/* 2>/dev/null || true
+    rmdir "$d" 2>/dev/null || true
+  done
+}
+trap cleanup_all EXIT
+
 # Optional colorization for demo messages (stderr). Set DEMO_COLOR=0 to disable.
 COLOR_ON="${DEMO_COLOR:-1}"
 if [[ "$COLOR_ON" == "1" ]]; then
@@ -28,9 +38,10 @@ print_banner() {
 
 run_stdio_demo() {
   print_banner "STDIO transport (FIFOs)"
-  local C2S="/tmp/mcp_c2s.fifo"
-  local S2C="/tmp/mcp_s2c.fifo"
-  rm -f "$C2S" "$S2C" 2>/dev/null || true
+  local TMPDIR="$(mktemp -d -t mcp_stdio.XXXXXX)"
+  TMP_DIRS+=("$TMPDIR")
+  local C2S="$TMPDIR/c2s.fifo"
+  local S2C="$TMPDIR/s2c.fifo"
   mkfifo "$C2S" "$S2C"
   # Pre-open both FIFOs RDWR to avoid open() blocking on the first writer/reader
   exec 3<>"$C2S"
@@ -60,6 +71,8 @@ run_stdio_demo() {
     fi
     wait "$SERVER_PID" 2>/dev/null || true
   fi
+  rm -f "$C2S" "$S2C" 2>/dev/null || true
+  rmdir "$TMPDIR" 2>/dev/null || true
   if [[ "$CLIENT_STATUS" -eq 0 ]]; then
     echo "${C_OK}[demo][stdio] SUCCESS${C_RST}" >&2
     return 0
@@ -71,7 +84,7 @@ run_stdio_demo() {
 
 run_shm_demo() {
   print_banner "Shared-memory transport (Boost.Interprocess message_queue)"
-  local CHANNEL="mcp-shm"
+  local CHANNEL="${MCP_SHM_CHANNEL:-$(basename "$(mktemp -u -t mcp_shm.XXXXXX)")}" 
   "$SERVER_BIN" --transport=shm --channel="$CHANNEL" 2>&2 &
   local SERVER_PID=$!
   sleep 0.2
@@ -94,7 +107,7 @@ run_shm_demo() {
 
 run_http_demo() {
   print_banner "HTTP transport (localhost loopback)"
-  local URL="http://127.0.0.1:9443"
+  local URL="http://127.0.0.1:${MCP_HTTP_PORT:-9443}"
   # HTTP readiness probe: send a minimal POST with JSON body and expect any response line.
   waitForHttp() {
     local host="$1"; local port="$2"; local path="${3:-/mcp/rpc}"; local timeout="${4:-30}";
@@ -112,8 +125,9 @@ run_http_demo() {
     done
     return 1
   }
-  local STDIN_FIFO="/tmp/mcp_http_stdin.fifo"
-  rm -f "$STDIN_FIFO" 2>/dev/null || true
+  local HTTP_TMPDIR="$(mktemp -d -t mcp_http.XXXXXX)"
+  TMP_DIRS+=("$HTTP_TMPDIR")
+  local STDIN_FIFO="$HTTP_TMPDIR/stdin.fifo"
   mkfifo "$STDIN_FIFO"
   ( tail -f /dev/null > "$STDIN_FIFO" ) &
   local HOLD_PID=$!
@@ -121,7 +135,7 @@ run_http_demo() {
   local SERVER_PID=$!
   local hp="${URL#*://}"; local host="${hp%%:*}"; local port="${hp##*:}"
   sleep 0.6
-  if ! waitForHttp "$host" "$port" /mcp/rpc 30; then kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+  if ! waitForHttp "$host" "$port" /mcp/rpc 30; then kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; rmdir "$HTTP_TMPDIR" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
 
   # If Bearer auth is required, first verify unauthorized path yields 401 and WWW-Authenticate header
   if [[ "${MCP_HTTP_REQUIRE_BEARER:-0}" == "1" ]]; then
@@ -171,14 +185,36 @@ run_http_demo() {
   # Authorized client: add bearer header if required
   if [[ "${MCP_HTTP_REQUIRE_BEARER:-0}" == "1" ]]; then
     local token="${MCP_HTTP_DEMO_TOKEN:-demo}"
-    "$CLIENT_BIN" --transport=http --url="$URL" --httpcfg="auth=bearer; bearerToken=${token}" 2>&2
-    # Authorized notify path using same token => 200
-    exec 5<>/dev/tcp/"$host"/"$port" || { echo "${C_ERR}[demo][http] Failed to open TCP for authorized notify${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; }
-    printf 'POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: 23\r\nConnection: close\r\n\r\n{"jsonrpc":"2.0","method":"n"}' "/mcp/notify" "$host" "$token" >&5 || true
-    if ! IFS= read -r -t 2 statusLine <&5; then statusLine=""; fi
-    exec 5>&- 5<&-
-    code=$(awk '{print $2}' <<< "$statusLine")
-    if [[ "$code" != "200" ]]; then echo "${C_ERR}[demo][http] Expected 200 for authorized notify, got: '$statusLine'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+    if [[ "${MCP_HTTP_EXPECT_FORBIDDEN:-0}" == "1" ]]; then
+      # Authorized RPC expecting 403 + WWW-Authenticate due to insufficient scopes
+      exec 5<>/dev/tcp/"$host"/"$port" || { echo "${C_ERR}[demo][http] Failed to open TCP for authorized RPC (expect 403)${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; }
+      printf 'POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}' "/mcp/rpc" "$host" "$token" >&5 || true
+      if ! IFS= read -r -t 2 statusLine <&5; then statusLine=""; fi
+      wwwHeader=""; while IFS= read -r -t 2 line <&5; do line="${line%$'\r'}"; [[ -z "$line" ]] && break; case "$line" in WWW-Authenticate:*) wwwHeader="$line";; esac; done
+      exec 5>&- 5<&-
+      code=$(awk '{print $2}' <<< "$statusLine")
+      if [[ "$code" != "403" ]]; then echo "${C_ERR}[demo][http] Expected 403 for authorized RPC, got: '$statusLine'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+      if [[ -z "$wwwHeader" || "$wwwHeader" != *"Bearer"* || "$wwwHeader" != *"resource_metadata="* ]]; then echo "${C_ERR}[demo][http] Missing/invalid WWW-Authenticate header on authorized RPC: '$wwwHeader'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+
+      # Authorized notify expecting 403 + WWW-Authenticate
+      exec 5<>/dev/tcp/"$host"/"$port" || { echo "${C_ERR}[demo][http] Failed to open TCP for authorized notify (expect 403)${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; }
+      printf 'POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: 23\r\nConnection: close\r\n\r\n{"jsonrpc":"2.0","method":"n"}' "/mcp/notify" "$host" "$token" >&5 || true
+      if ! IFS= read -r -t 2 statusLine <&5; then statusLine=""; fi
+      wwwHeader=""; while IFS= read -r -t 2 line <&5; do line="${line%$'\r'}"; [[ -z "$line" ]] && break; case "$line" in WWW-Authenticate:*) wwwHeader="$line";; esac; done
+      exec 5>&- 5<&-
+      code=$(awk '{print $2}' <<< "$statusLine")
+      if [[ "$code" != "403" ]]; then echo "${C_ERR}[demo][http] Expected 403 for authorized notify, got: '$statusLine'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+      if [[ -z "$wwwHeader" || "$wwwHeader" != *"Bearer"* || "$wwwHeader" != *"resource_metadata="* ]]; then echo "${C_ERR}[demo][http] Missing/invalid WWW-Authenticate header on authorized notify: '$wwwHeader'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+    else
+      "$CLIENT_BIN" --transport=http --url="$URL" --httpcfg="auth=bearer; bearerToken=${token}" 2>&2
+      # Authorized notify path using same token => 200
+      exec 5<>/dev/tcp/"$host"/"$port" || { echo "${C_ERR}[demo][http] Failed to open TCP for authorized notify${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; }
+      printf 'POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nAuthorization: Bearer %s\r\nContent-Length: 23\r\nConnection: close\r\n\r\n{"jsonrpc":"2.0","method":"n"}' "/mcp/notify" "$host" "$token" >&5 || true
+      if ! IFS= read -r -t 2 statusLine <&5; then statusLine=""; fi
+      exec 5>&- 5<&-
+      code=$(awk '{print $2}' <<< "$statusLine")
+      if [[ "$code" != "200" ]]; then echo "${C_ERR}[demo][http] Expected 200 for authorized notify, got: '$statusLine'${C_RST}" >&2; set +e; kill "$HOLD_PID" 2>/dev/null || true; rm -f "$STDIN_FIFO" 2>/dev/null || true; kill -TERM "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; return 1; fi
+    fi
   else
     "$CLIENT_BIN" --transport=http --url="$URL" 2>&2
   fi
@@ -199,6 +235,7 @@ run_http_demo() {
     fi
     wait "$SERVER_PID" 2>/dev/null || true
     rm -f "$STDIN_FIFO" 2>/dev/null || true
+    rmdir "$HTTP_TMPDIR" 2>/dev/null || true
   fi
   if [[ "$CLIENT_STATUS" -eq 0 ]]; then
     echo "${C_OK}[demo][http] SUCCESS${C_RST}" >&2
