@@ -117,6 +117,7 @@ public:
             }
         } catch (...) {
             // best-effort; errors surface during ensureReady()
+            LOG_DEBUG("HTTPTransport: auth initialization failed (suppressed; will surface in ensureReady)");
         }
     }
 
@@ -183,15 +184,15 @@ public:
                     (void)::SSL_set1_host(stream.native_handle(), opts.serverName.c_str());
                 }
                 {
-                    unsigned int maxAttempts = 5u;
-                    for (unsigned int attempt = 0u; attempt < maxAttempts; ++attempt) {
+                    std::size_t maxAttempts = 5;
+                    for (std::size_t attempt = 0; attempt < maxAttempts; ++attempt) {
                         bool retryDelay = false;
                         try {
                             stream.next_layer().expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
                             co_await stream.next_layer().async_connect(results, net::use_awaitable);
                             break;
                         } catch (const boost::system::system_error& e) {
-                            if (e.code() == boost::asio::error::connection_refused && attempt + 1u < maxAttempts) {
+                            if (e.code() == boost::asio::error::connection_refused && attempt < (maxAttempts - 1)) {
                                 if (errorHandler) {
                                     errorHandler("HTTP DEBUG: https connect refused; retrying");
                                 }
@@ -230,15 +231,15 @@ public:
             } else {
                 boost::beast::tcp_stream stream(ex);
                 {
-                    unsigned int maxAttempts = 5u;
-                    for (unsigned int attempt = 0u; attempt < maxAttempts; ++attempt) {
+                    std::size_t maxAttempts = 5;
+                    for (std::size_t attempt = 0; attempt < maxAttempts; ++attempt) {
                         bool retryDelay = false;
                         try {
                             stream.expires_after(std::chrono::milliseconds(opts.connectTimeoutMs));
                             co_await stream.async_connect(results, net::use_awaitable);
                             break;
                         } catch (const boost::system::system_error& e) {
-                            if (e.code() == boost::asio::error::connection_refused && attempt + 1u < maxAttempts) {
+                            if (e.code() == boost::asio::error::connection_refused && attempt < (maxAttempts - 1)) {
                                 if (errorHandler) {
                                     errorHandler("HTTP DEBUG: http connect refused; retrying");
                                 }
@@ -254,7 +255,9 @@ public:
                         }
                     }
                 }
-                if (errorHandler) { errorHandler("HTTP DEBUG: http connected"); }
+                if (errorHandler) {
+                    errorHandler("HTTP DEBUG: http connected");
+                }
 
                 req.set(http::field::host, opts.host);
                 stream.expires_after(std::chrono::milliseconds(opts.readTimeoutMs));
@@ -296,7 +299,9 @@ std::future<void> HTTPTransport::Start() {
             pr.set_value();
             pImpl->ioc.run();
         } catch (const std::exception& e) {
-            if (pImpl->errorHandler) { pImpl->errorHandler(e.what()); }
+            if (pImpl->errorHandler) {
+                pImpl->errorHandler(e.what());
+            }
             pr.set_value();
         }
     });

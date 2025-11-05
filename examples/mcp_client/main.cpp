@@ -27,7 +27,7 @@ using namespace mcp;
 //   Optional string containing the value when present
 //==========================================================================================================
 static std::optional<std::string> getArgValue(int argc, char** argv, const std::string& key) {
-    for (int i = 1; i < argc; ++i) {
+    for (size_t i = 1; i < static_cast<size_t>(argc); ++i) {
         std::string a = argv[i];
         auto eq = a.find('=');
         if (eq != std::string::npos) {

@@ -1,4 +1,11 @@
-<!-- SPDX-License-Identifier: MIT -->
+<!--
+==========================================================================================================
+SPDX-License-Identifier: MIT
+Copyright (c) 2025 Vinny Parla
+File: README.md
+Purpose: MCP C++ SDK root README (overview, build/test, API pointers)
+==========================================================================================================
+-->
 
 # MCP C++ SDK
 
