@@ -28,6 +28,7 @@
 #include "logging/Logger.h"
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/SharedMemoryTransport.hpp"
+#include "mcp/JsonRpcMessageRouter.h"
 
 namespace mcp {
 
@@ -50,10 +51,12 @@ public:
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
 
     std::string sessionId;
+    std::unique_ptr<IJsonRpcMessageRouter> router;
 
     Impl(const SharedMemoryTransport::Options& o)
         : opts(o) {
         sessionId = std::string("shm-") + opts.channelName;
+        router = MakeDefaultJsonRpcMessageRouter();
     }
 
     ~Impl() {
@@ -87,103 +90,32 @@ public:
                 return;
             }
         }
-        // Next, handle requests: must have a method and a top-level id
-        if (message.find("\"method\"") != std::string::npos) {
-            // Check for top-level id using a minimal parser
-            auto hasTopLevelId = [](const std::string& s) -> bool {
-                std::size_t i = 0;
-                auto isWs = [](char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
-                while (i < s.size() && isWs(s[i])) { ++i; }
-                if (i >= s.size() || s[i] != '{') { return false; }
-                ++i;
-                unsigned int depth = 1u;
-                bool inStr = false;
-                bool esc = false;
-                while (i < s.size()) {
-                    char c = s[i];
-                    ++i;
-                    
-                    if (inStr) {
-                        if (esc) { esc = false; continue; }
-                        if (c == '\\') { esc = true; continue; }
-                        if (c == '"') { inStr = false; }
-                        continue;
-                    }
-                    if (c == '"') {
-                        std::string key;
-                        bool e2 = false;
-                        while (i < s.size()) {
-                            char d = s[i];
-                            ++i;
-                            if (e2) {
-                                e2 = false;
-                                continue;
-                            }
-                            if (d == '\\') {
-                                e2 = true;  
-                                continue; 
-                            }
-                            if (d == '"') { 
-                                break; 
-                            }
-                            key.push_back(d);
-                        }
-                        while (i < s.size() && isWs(s[i])) { ++i; }
-                        if (i < s.size() && s[i] == ':') {
-                            ++i;
-                            if (depth == 1u && key == "id") {
-                                return true;
-                            }
-                        }
-                        continue;
-                    }
-                    if (c == '{') {
-                        // Guard against potential overflow on pathological nesting
-                        if (depth == std::numeric_limits<unsigned int>::max()) {
-                            return false;
-                        }
-                        ++depth;
-                        continue;
-                    }
-                    if (c == '}') {
-                        if (depth > 0u) {
-                            --depth;
-                            if (depth == 0u) { 
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                        continue;
-                    }
-                }
-                return false;
-            };
-            if (hasTopLevelId(message)) {
-                JSONRPCRequest req;
-                if (req.Deserialize(message)) {
-                    if (requestHandler) {
-                        std::thread([this, req = std::move(req)]() mutable {
-                            try {
-                                auto resp = requestHandler(req);
-                                if (!resp) {
-                                    resp = std::make_unique<JSONRPCResponse>();
-                                    resp->id = req.id;
-                                    resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Null response from handler", std::nullopt);
-                                } else {
-                                    resp->id = req.id;
-                                }
-                                sendResponse(*resp);
-                            } catch (const std::exception& e) {
-                                LOG_ERROR("SharedMemory request handler exception: {}", e.what());
-                                auto resp = std::make_unique<JSONRPCResponse>();
+        // Next, handle requests using router classification (must have method and top-level id)
+        if (message.find("\"method\"") != std::string::npos && router &&
+            router->classify(message) == IJsonRpcMessageRouter::MessageKind::Request) {
+            JSONRPCRequest req;
+            if (req.Deserialize(message)) {
+                if (requestHandler) {
+                    std::thread([this, req = std::move(req)]() mutable {
+                        try {
+                            auto resp = requestHandler(req);
+                            if (!resp) {
+                                resp = std::make_unique<JSONRPCResponse>();
                                 resp->id = req.id;
-                                resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
-                                sendResponse(*resp);
+                                resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Null response from handler", std::nullopt);
+                            } else {
+                                resp->id = req.id;
                             }
-                        }).detach();
-                        return;
-                    }
+                            sendResponse(*resp);
+                        } catch (const std::exception& e) {
+                            LOG_ERROR("SharedMemory request handler exception: {}", e.what());
+                            auto resp = std::make_unique<JSONRPCResponse>();
+                            resp->id = req.id;
+                            resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
+                            sendResponse(*resp);
+                        }
+                    }).detach();
+                    return;
                 }
             }
         }
@@ -444,9 +376,14 @@ std::future<std::unique_ptr<JSONRPCResponse>> SharedMemoryTransport::SendRequest
         }
     }, request->id);
     if (!callerSetId) {
-        // Simple request id generator
+        // Simple request id generator with wrap handling
         static std::atomic<unsigned long long> counter{0ull};
-        unsigned long long n = ++counter;
+        unsigned long long n = counter.fetch_add(1ull, std::memory_order_relaxed) + 1ull;
+        if (n == 0ull) {
+            // Wrapped around; reset to 1 to avoid an empty/duplicate suffix
+            counter.store(1ull, std::memory_order_relaxed);
+            n = 1ull;
+        }
         requestId = std::string("shm-req-") + std::to_string(n);
         request->id = requestId;
     }

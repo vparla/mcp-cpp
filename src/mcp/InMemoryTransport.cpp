@@ -19,6 +19,7 @@
 #include "logging/Logger.h"
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/InMemoryTransport.hpp"
+#include "mcp/JsonRpcMessageRouter.h"
 
 namespace mcp {
 
@@ -38,12 +39,14 @@ public:
     std::atomic<unsigned int> requestCounter{0u};
     std::mutex requestMutex;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
+    std::unique_ptr<IJsonRpcMessageRouter> router;
 
     Impl() {
         std::random_device rd;
         std::mt19937 gen(rd());
         std::uniform_int_distribution<> dis(1000, 9999);
         sessionId = "memory-" + std::to_string(dis(gen));
+        router = MakeDefaultJsonRpcMessageRouter();
     }
 
     ~Impl() {
@@ -76,81 +79,6 @@ public:
 
     void processMessage(const std::string& message) {
         LOG_DEBUG("Processing in-memory message: {}", message);
-        // Helper: detect if a given top-level key exists (e.g., id at root, not inside params)
-        auto hasTopLevelKey = [](const std::string& s, const std::string& key) -> bool {
-            std::size_t i = 0; auto isWs = [](char c){ return c==' '||c=='\t'||c=='\r'||c=='\n'; };
-            while (i < s.size() && isWs(s[i])) {
-                ++i;
-            }
-            if (i >= s.size() || s[i] != '{') {
-                return false;
-            }
-            ++i; unsigned int depth = 1u; bool inStr = false; bool esc = false;
-            while (i < s.size()) {
-                char c = s[i];
-                ++i;
-                if (inStr) {
-                    if (esc) {
-                        esc = false;
-                        continue;
-                    }
-                    if (c == '\\') {
-                        esc = true;
-                        continue;
-                    }
-                    if (c == '"') {
-                        inStr = false;
-                    }
-                    continue;
-                }
-                if (c == '"') {
-                    // Parse a string key
-                    std::string keyStr; bool e2 = false;
-                    while (i < s.size()) {
-                        char d = s[i++];
-                        if (e2) {
-                            e2 = false;
-                            continue;
-                        }
-                        if (d == '\\') {
-                            e2 = true;
-                            continue;
-                        }
-                        if (d == '"') {
-                            break;
-                        }
-                        keyStr.push_back(d);
-                    }
-                    while (i < s.size() && isWs(s[i])) {
-                        ++i;
-                    }
-                    if (i < s.size() && s[i] == ':') {
-                        ++i;
-                        if (depth == 1 && keyStr == key) {
-                            return true;
-                        }
-                    }
-                    continue;
-                }
-                if (c == '{') {
-                    ++depth;
-                    continue;
-                }
-                if (c == '}') {
-                    if (depth > 0u) {
-                        --depth;
-                        if (depth == 0u) {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                    continue;
-                }
-                // ignore other characters, including arrays
-            }
-            return false;
-        };
 
         // First, handle responses (have top-level result or error)
         if (message.find("\"result\"") != std::string::npos || message.find("\"error\"") != std::string::npos) {
@@ -161,7 +89,8 @@ public:
             }
         }
         // Next, handle requests: must have a method and a TOP-LEVEL id
-        if (message.find("\"method\"") != std::string::npos && hasTopLevelKey(message, "id")) {
+        if (message.find("\"method\"") != std::string::npos && router &&
+            router->classify(message) == IJsonRpcMessageRouter::MessageKind::Request) {
             JSONRPCRequest request;
             if (request.Deserialize(message)) {
                 if (requestHandler) {

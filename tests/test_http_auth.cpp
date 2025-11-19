@@ -18,6 +18,7 @@
 #include <iostream>
 #include <utility>
 #include <sstream>
+#include <limits>
 
 #include <boost/asio.hpp>
 #include <boost/beast/core.hpp>
@@ -209,7 +210,9 @@ TEST(HTTPAuth, OAuthClientCredentials_UnreachableTokenEndpoint_NoHeader) {
     auto t = f.CreateTransport(cfg.str());
     auto* http = dynamic_cast<mcp::HTTPTransport*>(t.get());
     ASSERT_NE(http, nullptr);
-    unsigned short badPort = static_cast<unsigned short>(srv.port + 1);
+    const unsigned short badPort = (srv.port < std::numeric_limits<unsigned short>::max())
+        ? static_cast<unsigned short>(srv.port + 1u)
+        : static_cast<unsigned short>(srv.port == 0 ? 1u : srv.port - 1u);
     auto auth = std::make_shared<mcp::auth::OAuth2ClientCredentialsAuth>(
         std::string("http://127.0.0.1:") + std::to_string(badPort) + std::string("/token"),
         std::string("cid"),

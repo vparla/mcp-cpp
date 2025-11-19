@@ -97,9 +97,12 @@ public:
     //==========================================================================================================
     void SetWriteTimeoutMs(uint64_t timeoutMs);
 
+    void SetMaxContentLength(std::size_t maxBytes);
+
 private:
     class Impl;
     std::unique_ptr<Impl> pImpl;
+    friend struct StdioTransportTestHooks;
 };
 
 //==========================================================================================================
@@ -109,6 +112,12 @@ private:
 class StdioTransportFactory : public ITransportFactory {
 public:
     std::unique_ptr<ITransport> CreateTransport(const std::string& config) override;
+};
+
+struct StdioTransportTestHooks {
+    static void drainFrames(StdioTransport& t, std::string& buffer);
+    static void setConnected(StdioTransport& t, bool v);
+    static bool isConnected(const StdioTransport& t);
 };
 
 } // namespace mcp

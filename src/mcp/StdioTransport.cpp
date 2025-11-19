@@ -47,6 +47,8 @@
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/StdioTransport.hpp"
 #include "env/EnvVars.h"
+#include "mcp/JsonRpcMessageRouter.h"
+#include "mcp/ContentFramer.h"
 
 namespace mcp {
 
@@ -73,6 +75,8 @@ public:
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> requestDeadlines;
     std::atomic<unsigned int> requestCounter{0u};
+    std::unique_ptr<IJsonRpcMessageRouter> router;
+    std::unique_ptr<IContentFramer> framer;
 
 #ifdef _WIN32
     HANDLE stopEvent{NULL};
@@ -95,6 +99,7 @@ public:
     std::size_t queuedBytes{0};
     std::size_t writeQueueMaxBytes{2 * 1024 * 1024}; // 2 MiB default cap
     std::chrono::milliseconds writeTimeout{0}; // 0 = disabled
+    std::size_t contentMaxLength{MaxContentLength};
 
     Impl() {
         // Generate session ID
@@ -149,6 +154,8 @@ public:
         }
     #endif
 #endif
+        router = MakeDefaultJsonRpcMessageRouter();
+        framer = MakeContentLengthFramer(contentMaxLength);
     }
 
     ~Impl() {
@@ -190,16 +197,10 @@ public:
 #endif
     }
 
-    static std::string makeFrame(const std::string& payload) {
-        std::string header = "Content-Length: " + std::to_string(payload.size()) + "\r\n\r\n";
-        std::string frame; frame.reserve(header.size() + payload.size());
-        frame.append(header);
-        frame.append(payload);
-        return frame;
-    }
+    
 
     bool enqueueFrame(const std::string& payload) {
-        std::string frame = makeFrame(payload);
+        std::string frame = framer->encode(payload);
         {
             std::unique_lock<std::mutex> lk(writeMutex);
             if (queuedBytes + frame.size() > writeQueueMaxBytes) {
@@ -247,148 +248,42 @@ public:
         return true;
     }
 
-    std::optional<std::string> readFrame(std::istream& in) {
-        std::string line;
-        std::size_t contentLength = 0;
-        bool haveLength = false;
+    
 
-        while (std::getline(in, line)) {
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty()) {
-                break;
-            }
-            auto colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string name = line.substr(0, colon);
-                std::string value = line.substr(colon + 1);
-                value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch){ return !std::isspace(ch); }));
-                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                if (name == "content-length") {
-                    try {
-                        unsigned long long v64 = std::stoull(value);
-                        if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
-                            LOG_WARN("Invalid or too large Content-Length header: {}", value);
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: body too large");
-                            }
-                            return std::nullopt;
-                        }
-                        contentLength = static_cast<std::size_t>(v64);
-                        haveLength = true;
-                    } catch (...) {
-                        LOG_WARN("Invalid Content-Length header: {}", value);
-                        return std::nullopt;
-                    }
-                }
-            }
-        }
-
-        if (!in.good()) {
-            return std::nullopt;
-        }
-        if (!haveLength) {
-            LOG_WARN("Missing Content-Length header");
-            return std::nullopt;
-        }
-
-        if (contentLength > MaxContentLength) {
-            LOG_WARN("Content-Length {} exceeds max {}", contentLength, MaxContentLength);
-            if (errorHandler) {
-                errorHandler("StdioTransport: body too large");
-            }
-            return std::nullopt;
-        }
-
-        std::string body;
-        body.resize(contentLength);
-        std::size_t total = 0;
-        while (total < contentLength) {
-            in.read(&body[total], static_cast<std::streamsize>(contentLength - total));
-            std::streamsize got = in.gcount();
-            if (got <= 0) {
-                LOG_WARN("Unexpected EOF while reading body (read {} of {} bytes)", total, contentLength);
-                return std::nullopt;
-            }
-            total += static_cast<std::size_t>(got);
-        }
-        return body;
-    }
-
-    // Extract one framed message from the rolling buffer if present; mutate buffer to remove consumed bytes
-    std::optional<std::string> extractFrame(std::string& buf) {
-        const std::string sep = "\r\n\r\n";
-        std::size_t headerEnd = buf.find(sep);
-        if (headerEnd == std::string::npos) {
-            return std::nullopt;
-        }
-
-        std::size_t pos = 0;
-        std::size_t contentLength = 0;
-        bool haveLength = false;
-        while (pos < headerEnd) {
-            std::size_t eol = buf.find("\r\n", pos);
-            if (eol == std::string::npos || eol > headerEnd) {
-                break;
-            }
-            std::string line = buf.substr(pos, eol - pos);
-            auto colon = line.find(':');
-            if (colon != std::string::npos) {
-                std::string name = line.substr(0, colon);
-                std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c){ return static_cast<char>(std::tolower(c)); });
-                std::string value = line.substr(colon + 1);
-                value.erase(value.begin(), std::find_if(value.begin(), value.end(), [](unsigned char ch){ return !std::isspace(ch); }));
-                if (name == "content-length") {
-                    try {
-                        unsigned long long v64 = std::stoull(value);
-                        if (v64 > MaxContentLength || v64 > std::numeric_limits<std::size_t>::max()) {
-                            LOG_WARN("Content-Length {} exceeds limits (max={})", v64, MaxContentLength);
-                            if (errorHandler) {
-                                errorHandler("StdioTransport: body too large");
-                            }
-                            buf.erase(0, headerEnd + sep.size());
-                            return std::nullopt;
-                        }
-                        contentLength = static_cast<std::size_t>(v64);
-                        haveLength = true;
-                    } catch (...) {
-                        LOG_WARN("Invalid Content-Length header: {}", value);
-                    }
-                }
-            }
-            pos = eol + 2;
-        }
-
-        if (!haveLength) {
-            LOG_WARN("Missing Content-Length header (dropping headers)");
-            buf.erase(0, headerEnd + sep.size());
-            return std::nullopt;
-        }
-
-        const std::size_t headerAndSep = headerEnd + sep.size();
-        if (contentLength > std::numeric_limits<std::size_t>::max() - headerAndSep) {
-            LOG_WARN("Frame size overflow detected (header={}, len={})", headerAndSep, contentLength);
-            buf.erase(0, headerEnd + sep.size());
-            return std::nullopt;
-        }
-        std::size_t frameTotal = headerAndSep + contentLength;
-        if (buf.size() < frameTotal) {
-            return std::nullopt;
-        }
-        std::string payload = buf.substr(headerEnd + sep.size(), contentLength);
-        buf.erase(0, frameTotal);
-        return payload;
-    }
+    
 
     void drainFrames(std::string& buffer) {
         lastReadTs = std::chrono::steady_clock::now();
         while (connected) {
-            auto framed = extractFrame(buffer);
-            if (!framed.has_value()) {
-                break;
+            auto res = framer->tryDecodeEx(buffer);
+            if (res.status == IContentFramer::DecodeStatus::Ok && res.payload.has_value()) {
+                if (res.bytesConsumed > 0 && res.bytesConsumed <= buffer.size()) {
+                    buffer.erase(0, res.bytesConsumed);
+                }
+                processMessage(res.payload.value());
+                continue;
             }
-            processMessage(framed.value());
+            if (res.status == IContentFramer::DecodeStatus::Incomplete) {
+                break; // need more bytes
+            }
+            if (res.status == IContentFramer::DecodeStatus::InvalidHeader) {
+                LOG_WARN("StdioTransport: invalid frame header");
+                // Drop just the header+sep bytes to recover, then continue reading
+                if (res.bytesConsumed > 0 && res.bytesConsumed <= buffer.size()) {
+                    buffer.erase(0, res.bytesConsumed);
+                } else if (!buffer.empty()) {
+                    buffer.erase(buffer.begin());
+                }
+                continue;
+            }
+            if (res.status == IContentFramer::DecodeStatus::BodyTooLarge) {
+                LOG_ERROR("StdioTransport: body too large (exceeded max cap)");
+                if (errorHandler) {
+                    errorHandler("StdioTransport: body too large");
+                }
+                connected = false;
+                return;
+            }
         }
     }
 
@@ -1075,40 +970,22 @@ public:
 
     void processMessage(const std::string& message) {
         LOG_DEBUG("Received message: {}", message);
-        JSONRPCRequest request;
-        if (message.find("\"method\"") != std::string::npos && message.find("\"id\"") != std::string::npos && request.Deserialize(message)) {
-            if (requestHandler) {
-                // Run request handling off-thread so reader can continue processing notifications (e.g., cancellations)
-                std::thread([this, req = request]() mutable {
-                    try {
-                        auto resp = requestHandler(req);
-                        if (!resp) {
-                            resp = std::make_unique<JSONRPCResponse>();
-                            resp->id = req.id;
-                            resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Null response from handler", std::nullopt);
-                        } else {
-                            resp->id = req.id;
-                        }
-                        const std::string payload = resp->Serialize();
-                        (void)enqueueFrame(payload);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("Request handler exception: {}", e.what());
-                        auto resp = std::make_unique<JSONRPCResponse>();
-                        resp->id = req.id;
-                        resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what(), std::nullopt);
-                        std::string payload = resp->Serialize();
-                        (void)enqueueFrame(payload);
-                    }
-                }).detach();
-                return;
-            }
-        }
-        JSONRPCResponse response;
-        if (response.Deserialize(message)) {
-            handleResponse(std::move(response));
+        if (!router) {
+            LOG_WARN("No router available; dropping message");
             return;
         }
-        LOG_WARN("Failed to parse message: {}", message);
+        RouterHandlers handlers;
+        handlers.requestHandler = requestHandler;
+        handlers.notificationHandler = notificationHandler;
+        handlers.errorHandler = errorHandler;
+        auto maybeResponse = router->route(
+            message,
+            handlers,
+            [this](JSONRPCResponse&& r){ this->handleResponse(std::move(r)); }
+        );
+        if (maybeResponse.has_value()) {
+            (void)enqueueFrame(maybeResponse.value());
+        }
     }
 
     void handleResponse(JSONRPCResponse response) {
@@ -1355,6 +1232,15 @@ void StdioTransport::SetWriteTimeoutMs(uint64_t timeoutMs) {
     pImpl->writeTimeout = (timeoutMs == 0) ? std::chrono::milliseconds(0) : std::chrono::milliseconds(timeoutMs);
 }
 
+void StdioTransport::SetMaxContentLength(std::size_t maxBytes) {
+    FUNC_SCOPE();
+    if (maxBytes == 0) {
+      maxBytes = 1;
+    }
+    pImpl->contentMaxLength = maxBytes;
+    pImpl->framer = MakeContentLengthFramer(pImpl->contentMaxLength);
+}
+
 std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::string& config) {
     auto t = std::make_unique<StdioTransport>();
     // Parse key=value pairs separated by ';' or whitespace
@@ -1405,6 +1291,11 @@ std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::st
                 if (parseSize(val, v)) {
                     t->SetWriteQueueMaxBytes(v);
                 }
+            } else if (key == "max_content_length") {
+                std::size_t v;
+                if (parseSize(val, v)) {
+                    t->SetMaxContentLength(v);
+                }
             }
         }
     }
@@ -1412,3 +1303,22 @@ std::unique_ptr<ITransport> StdioTransportFactory::CreateTransport(const std::st
 }
 
 } // namespace mcp
+
+namespace mcp {
+void StdioTransportTestHooks::drainFrames(StdioTransport& t, std::string& buffer) {
+    if (t.pImpl) {
+        t.pImpl->drainFrames(buffer);
+    }
+}
+void StdioTransportTestHooks::setConnected(StdioTransport& t, bool v) {
+    if (t.pImpl) {
+        t.pImpl->connected.store(v);
+    }
+}
+bool StdioTransportTestHooks::isConnected(const StdioTransport& t) {
+    if (t.pImpl) {
+        return t.pImpl->connected.load();
+    }
+    return false;
+}
+}

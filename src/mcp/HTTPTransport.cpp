@@ -29,6 +29,7 @@
 
 #include "logging/Logger.h"
 #include "mcp/JSONRPCTypes.h"
+#include "mcp/JsonRpcMessageRouter.h"
 #include "mcp/Transport.h"
 #include "mcp/HTTPTransport.hpp"
 #include "mcp/auth/IAuth.hpp"
@@ -62,6 +63,7 @@ public:
     std::mutex requestMutex;
     std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
     bool caInitOk{true};
+    std::unique_ptr<IJsonRpcMessageRouter> router;
 
     // Pluggable auth
     std::shared_ptr<mcp::auth::IAuth> authStrong;
@@ -71,6 +73,7 @@ public:
         // Random session id similar to InMemoryTransport
         std::random_device rd; std::mt19937 gen(rd()); std::uniform_int_distribution<> dis(1000, 9999);
         sessionId = "http-" + std::to_string(dis(gen));
+        router = MakeDefaultJsonRpcMessageRouter();
         if (opts.scheme == "https") {
             sslCtx = std::make_unique<ssl::context>(ssl::context::tls_client);
             ::SSL_CTX_set_min_proto_version(sslCtx->native_handle(), TLS1_3_VERSION);
@@ -431,50 +434,92 @@ std::future<std::unique_ptr<JSONRPCResponse>> HTTPTransport::SendRequest(
                     }
                 }
             }
-            std::unique_ptr<JSONRPCResponse> out;
-            if (!body.empty()) {
-                auto resp = std::make_unique<JSONRPCResponse>();
-                if (resp->Deserialize(body)) {
-                    if (pImpl->errorHandler) {
-                        std::string respIdS;
-                        std::visit([&](const auto& id){
-                            using T = std::decay_t<decltype(id)>;
-                            if constexpr (std::is_same_v<T, std::string>) {
-                                respIdS = id;
+
+            // Attempt to route via router. If routing resolves the promise, we return early.
+            bool delivered = false;
+            if (!body.empty() && pImpl->router) {
+                RouterHandlers handlers{};
+                // No request/notification expected client-side; only errorHandler for logging.
+                handlers.errorHandler = pImpl->errorHandler;
+
+                auto resolve = [this, &delivered, idStr](JSONRPCResponse&& response) mutable {
+                    // Build lookup key from parsed response.id
+                    std::string respKey;
+                    std::visit([&](const auto& id){
+                        using T = std::decay_t<decltype(id)>;
+                        if constexpr (std::is_same_v<T, std::string>) { respKey = id; }
+                        else if constexpr (std::is_same_v<T, int64_t>) { respKey = std::to_string(id); }
+                        else { respKey.clear(); }
+                    }, response.id);
+
+                    // First try to deliver by response id
+                    {
+                        std::promise<std::unique_ptr<JSONRPCResponse>> deliverPromise;
+                        bool havePromise = false;
+                        {
+                            std::lock_guard<std::mutex> lk(pImpl->requestMutex);
+                            auto it = !respKey.empty() ? pImpl->pendingRequests.find(respKey) : pImpl->pendingRequests.end();
+                            if (pImpl->errorHandler) {
+                                pImpl->errorHandler(std::string("HTTPTransport: router resolve lookup key=") + (respKey.empty() ? std::string("<null>") : respKey) + (it != pImpl->pendingRequests.end() ? std::string(" hit") : std::string(" miss")) + std::string("; pending=") + std::to_string(pImpl->pendingRequests.size()));
                             }
-                            else if constexpr (std::is_same_v<T, int64_t>) {
-                                respIdS = std::to_string(id);
+                            if (it != pImpl->pendingRequests.end()) {
+                                deliverPromise = std::move(it->second);
+                                pImpl->pendingRequests.erase(it);
+                                havePromise = true;
                             }
-                            else {
-                                respIdS = std::string("null");
-                            }
-                        }, resp->id);
-                        pImpl->errorHandler(std::string("HTTPTransport: parsed response id=") + respIdS);
+                        }
+                        if (havePromise) {
+                            deliverPromise.set_value(std::make_unique<JSONRPCResponse>(std::move(response)));
+                            delivered = true;
+                            return;
+                        }
                     }
-                    out = std::move(resp);
+
+                    // Fallback: resolve the original request id with InternalError (avoid hangs)
+                    {
+                        std::promise<std::unique_ptr<JSONRPCResponse>> deliverPromise;
+                        bool havePromise = false;
+                        {
+                            std::lock_guard<std::mutex> lk(pImpl->requestMutex);
+                            auto it = pImpl->pendingRequests.find(idStr);
+                            if (it != pImpl->pendingRequests.end()) {
+                                deliverPromise = std::move(it->second);
+                                pImpl->pendingRequests.erase(it);
+                                havePromise = true;
+                            }
+                        }
+                        if (havePromise) {
+                            auto err = std::make_unique<JSONRPCResponse>();
+                            err->id = idStr;
+                            err->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Mismatched response id", std::nullopt);
+                            deliverPromise.set_value(std::move(err));
+                            delivered = true;
+                        }
+                    }
+                };
+
+                (void)pImpl->router->route(body, handlers, resolve);
+                if (delivered) {
+                    return;
                 }
             }
 
-            if (!out) {
-                auto err = std::make_unique<JSONRPCResponse>();
-                // Attempt to set id from known idStr if available
-                if (!idStr.empty()) {
-                    err->id = idStr;
-                } else {
-                    err->id = nullptr;
-                }
-                err->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Invalid/empty HTTP response", std::nullopt);
-                out = std::move(err);
+            // Fallback: map to InternalError and resolve pending promise
+            auto err = std::make_unique<JSONRPCResponse>();
+            if (!idStr.empty()) {
+                err->id = idStr;
+            } else {
+                err->id = nullptr;
             }
-            
-            // Deliver to pending promise: move promise out under lock, fulfill outside lock
+            err->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Invalid/empty HTTP response", std::nullopt);
+
             std::promise<std::unique_ptr<JSONRPCResponse>> deliverPromise;
             bool havePromise = false;
             {
                 std::lock_guard<std::mutex> lk(pImpl->requestMutex);
                 auto it = pImpl->pendingRequests.find(idStr);
                 if (pImpl->errorHandler) {
-                    pImpl->errorHandler(std::string("HTTPTransport: deliver lookup key=") + idStr + (it != pImpl->pendingRequests.end() ? std::string(" hit") : std::string(" miss")) + std::string("; pending=") + std::to_string(pImpl->pendingRequests.size()));
+                    pImpl->errorHandler(std::string("HTTPTransport: fallback deliver lookup key=") + idStr + (it != pImpl->pendingRequests.end() ? std::string(" hit") : std::string(" miss")) + std::string("; pending=") + std::to_string(pImpl->pendingRequests.size()));
                 }
                 if (it != pImpl->pendingRequests.end()) {
                     deliverPromise = std::move(it->second);
@@ -484,11 +529,11 @@ std::future<std::unique_ptr<JSONRPCResponse>> HTTPTransport::SendRequest(
             }
             if (havePromise) {
                 if (pImpl->errorHandler) {
-                    pImpl->errorHandler("HTTPTransport: set_value start");
+                    pImpl->errorHandler("HTTPTransport: fallback set_value start");
                 }
-                deliverPromise.set_value(std::move(out));
+                deliverPromise.set_value(std::move(err));
                 if (pImpl->errorHandler) {
-                    pImpl->errorHandler("HTTPTransport: set_value done");
+                    pImpl->errorHandler("HTTPTransport: fallback set_value done");
                 }
             }
         });

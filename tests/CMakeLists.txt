@@ -64,6 +64,12 @@ add_executable(mcp_tests
   test_shared_memory_transport.cpp
   test_http_auth.cpp
   test_http_server_bearer.cpp
+  test_message_router.cpp
+  test_content_framer.cpp
+  test_stdio_drainframes.cpp
+  test_inmemory_concurrency.cpp
+  test_stdio_writer.cpp
+  test_http_transport_errors.cpp
   )
 
 target_link_libraries(mcp_tests

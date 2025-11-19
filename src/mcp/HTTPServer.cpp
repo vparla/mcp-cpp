@@ -26,6 +26,7 @@
 #include "mcp/HTTPServer.hpp"
 #include "mcp/JSONRPCTypes.h"
 #include "mcp/auth/ServerAuth.hpp"
+#include "mcp/JsonRpcMessageRouter.h"
 
 #include <openssl/ssl.h>
 
@@ -57,6 +58,8 @@ public:
     std::promise<void> listenReadyPromise;
     std::atomic<bool> listenReadySignaled{false};
 
+    std::unique_ptr<IJsonRpcMessageRouter> router;
+
     explicit Impl(const HTTPServer::Options& o) : opts(o) {
         if (opts.scheme == "https") {
             sslCtx = std::make_unique<ssl::context>(ssl::context::tls_server);
@@ -74,6 +77,7 @@ public:
                 ssl::context::default_workarounds | ssl::context::no_sslv2 | ssl::context::no_sslv3 |
                 ssl::context::no_tlsv1 | ssl::context::no_tlsv1_1 | ssl::context::no_tlsv1_2);
         }
+        router = MakeDefaultJsonRpcMessageRouter();
     }
 
     ~Impl() {
@@ -211,27 +215,38 @@ public:
             return res;
         }
         mcp::auth::TokenInfoScope tokenScope(bearerAuthEnabled ? &info : nullptr);
+        // Preserve ParseError mapping for invalid request JSON
         JSONRPCRequest rpc;
         if (!rpc.Deserialize(req.body())) {
             auto err = CreateErrorResponse(nullptr, JSONRPCErrorCodes::ParseError, "Parse error");
             res.body() = err->Serialize(); res.prepare_payload();
             return res;
         }
-        std::unique_ptr<JSONRPCResponse> out;
-        try {
-            out = requestHandler ? requestHandler(rpc) : nullptr;
-        } catch (const std::exception& e) {
-            auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
-            er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what());
-            out = std::move(er);
+
+        RouterHandlers handlers{};
+        handlers.requestHandler = requestHandler;
+        handlers.notificationHandler = notificationHandler;
+        handlers.errorHandler = errorHandler;
+
+        auto resolve = [&](JSONRPCResponse&&) {
+            // Unexpected inbound response on /rpc endpoint; surface via error handler only
+            if (errorHandler) { errorHandler("HTTPServer: unexpected response received on /rpc"); }
+        };
+
+        auto routed = router ? router->route(req.body(), handlers, resolve) : std::optional<std::string>{};
+        if (routed.has_value()) {
+            res.body() = routed.value();
+            res.prepare_payload();
+            return res;
         }
-        if (!out) {
-            auto er = std::make_unique<JSONRPCResponse>(); er->id = rpc.id;
-            er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "No response from handler");
-            out = std::move(er);
+        // Safety fallback (should not happen if request parsed successfully)
+        {
+            auto er = std::make_unique<JSONRPCResponse>();
+            er->id = rpc.id;
+            er->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Router did not produce response");
+            res.body() = er->Serialize(); res.prepare_payload();
+            return res;
         }
-        res.body() = out->Serialize(); res.prepare_payload();
-        return res;
     }
 
     //==========================================================================================================
@@ -253,10 +268,15 @@ public:
             res.body() = er->Serialize(); res.prepare_payload();
             return res;
         }
-        if (notificationHandler) {
-            try { notificationHandler(std::make_unique<JSONRPCNotification>(std::move(note))); }
-            catch (const std::exception& e) { setError(std::string("Notification handler error: ") + e.what()); }
-        }
+
+        RouterHandlers handlers{};
+        handlers.requestHandler = requestHandler; // not used on notify path but harmless
+        handlers.notificationHandler = notificationHandler;
+        handlers.errorHandler = errorHandler;
+
+        auto resolve = [](JSONRPCResponse&&) {};
+        (void)(router ? router->route(req.body(), handlers, resolve) : std::optional<std::string>{});
+
         res.body() = std::string("{}"); res.prepare_payload();
         return res;
     }
