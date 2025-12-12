@@ -27,6 +27,15 @@ In this SDK the server and/or client use the experimental map for:
 - `capabilities.experimental.logLevel` (client → server) — see [Logging to client](#logging-to-client) for client-selected minimum log level.
 - `capabilities.experimental.resourceReadChunking` (server → client) — see [Resource read chunking (experimental)](#resource-read-chunking-experimental).
 
+## Extensions capabilities (optional)
+
+Clients may advertise optional extensions in the initialize request under `capabilities.extensions` (per SEP‑1724). The SDK now models these verbatim in `ClientCapabilities.extensions` so server code can detect extension support without schema loss. For MCP Apps (SEP‑1865), the extension identifier is `io.modelcontextprotocol/ui` (see `Extensions::uiExtensionId` in [include/mcp/Protocol.h](../../include/mcp/Protocol.h)).
+
+Notes:
+
+- Unknown extension objects are preserved as `JSONValue`s without interpretation.
+- Malformed shapes (non‑object `extensions`, wrong types inside entries) are ignored safely during parsing.
+
 ## Type aliases and handlers
 - using ToolResult = CallToolResult
 - using ResourceContent = ReadResourceResult
@@ -230,6 +239,29 @@ acceptor->Start().get();
 - void UnregisterTool(const std::string& name)
 - std::vector<Tool> ListTools()
 - std::future<JSONValue> CallTool(const std::string& name, const JSONValue& arguments)
+
+### Tools metadata (`_meta`)
+
+- The `Tool` type supports an optional metadata field serialized as `_meta` in `tools/list` responses. This allows servers to attach arbitrary JSON metadata to tools without changing the core schema.
+- Example: Linking a tool to a UI resource (MCP Apps):
+
+```json
+{
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get weather with interactive dashboard",
+      "inputSchema": { "type": "object", "properties": { "location": {"type":"string"} } },
+      "_meta": { "ui/resourceUri": "ui://weather-server/dashboard" }
+    }
+  ]
+}
+```
+
+Notes:
+
+- `_meta` is omitted when not provided.
+- The value is a free-form JSON object (or any JSONValue preserved verbatim). Hosts that do not recognize `_meta` safely ignore it.
 
 ## Resources
 - void RegisterResource(const std::string& uri, ResourceHandler handler)

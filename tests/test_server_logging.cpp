@@ -23,7 +23,7 @@ TEST(ServerLogging, RespectsClientLogLevel) {
     auto client = std::move(pair.first);
     auto serverTrans = std::move(pair.second);
 
-    // Capture notifications/log on client side
+    // Capture notifications/message on client side
     std::atomic<unsigned int> received{0u};
     std::promise<std::string> gotErrorMsg; auto gotErrorFut = gotErrorMsg.get_future();
 
@@ -36,7 +36,7 @@ TEST(ServerLogging, RespectsClientLogLevel) {
             const auto& v = note->params.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& o = std::get<JSONValue::Object>(v.value);
-                auto it = o.find("message");
+                auto it = o.find("data");
                 if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
                     gotErrorMsg.set_value(std::get<std::string>(it->second->value));
                 }
@@ -48,16 +48,20 @@ TEST(ServerLogging, RespectsClientLogLevel) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize with client capabilities.experimental.logLevel = "WARN"
+    // Initialize and set client log level to warning via logging/setLevel
     auto init = std::make_unique<JSONRPCRequest>();
     init->method = Methods::Initialize;
-    JSONValue::Object caps; // { capabilities: { experimental: { logLevel: "WARN" } } }
-    JSONValue::Object exp; exp["logLevel"] = std::make_shared<JSONValue>(std::string("WARN"));
-    JSONValue::Object c; c["experimental"] = std::make_shared<JSONValue>(exp);
-    JSONValue::Object root; root["capabilities"] = std::make_shared<JSONValue>(c);
-    init->params.emplace(root);
+    init->params.emplace(JSONValue::Object{});
     auto initRespFut = client->SendRequest(std::move(init));
     ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto setReq = std::make_unique<JSONRPCRequest>();
+    setReq->method = Methods::SetLogLevel;
+    {
+        JSONValue::Object p; p["level"] = std::make_shared<JSONValue>(std::string("warning"));
+        setReq->params.emplace(JSONValue{p});
+    }
+    auto setRespFut = client->SendRequest(std::move(setReq));
+    ASSERT_EQ(setRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 
     // INFO log should be suppressed
     server.LogToClient("INFO", "info-message", std::nullopt);
@@ -91,15 +95,17 @@ TEST(ServerLogging, WarningAliasDeliveredAtThreshold) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize with WARN min
+    // Initialize and set log level to warning
     auto init = std::make_unique<JSONRPCRequest>();
     init->method = Methods::Initialize;
-    JSONValue::Object exp; exp["logLevel"] = std::make_shared<JSONValue>(std::string("WARN"));
-    JSONValue::Object caps; caps["experimental"] = std::make_shared<JSONValue>(exp);
-    JSONValue::Object root; root["capabilities"] = std::make_shared<JSONValue>(caps);
-    init->params.emplace(root);
+    init->params.emplace(JSONValue::Object{});
     auto initRespFut = client->SendRequest(std::move(init));
     ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto setReq = std::make_unique<JSONRPCRequest>();
+    setReq->method = Methods::SetLogLevel;
+    { JSONValue::Object p; p["level"] = std::make_shared<JSONValue>(std::string("warning")); setReq->params.emplace(JSONValue{p}); }
+    auto setRespFut = client->SendRequest(std::move(setReq));
+    ASSERT_EQ(setRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 
     // Send WARNING (alias of WARN) should pass
     server.LogToClient("WARNING", "alias-ok", std::nullopt);
@@ -107,14 +113,14 @@ TEST(ServerLogging, WarningAliasDeliveredAtThreshold) {
     auto v = fut.get();
     ASSERT_TRUE(std::holds_alternative<JSONValue::Object>(v.value));
     const auto& o = std::get<JSONValue::Object>(v.value);
-    auto itMsg = o.find("message");
-    ASSERT_TRUE(itMsg != o.end());
-    ASSERT_TRUE(std::holds_alternative<std::string>(itMsg->second->value));
-    EXPECT_EQ(std::get<std::string>(itMsg->second->value), std::string("alias-ok"));
     auto itLvl = o.find("level");
     ASSERT_TRUE(itLvl != o.end());
     ASSERT_TRUE(std::holds_alternative<std::string>(itLvl->second->value));
-    EXPECT_EQ(std::get<std::string>(itLvl->second->value), std::string("WARNING"));
+    EXPECT_EQ(std::get<std::string>(itLvl->second->value), std::string("warning"));
+    auto itData = o.find("data");
+    ASSERT_TRUE(itData != o.end());
+    ASSERT_TRUE(std::holds_alternative<std::string>(itData->second->value));
+    EXPECT_EQ(std::get<std::string>(itData->second->value), std::string("alias-ok"));
 
     client->Close().get();
     server.Stop().get();
@@ -136,15 +142,14 @@ TEST(ServerLogging, UnknownLevelSuppressedAtWarnMin) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize with WARN min
+    // Initialize and set WARN min via logging/setLevel
     auto init = std::make_unique<JSONRPCRequest>();
     init->method = Methods::Initialize;
-    JSONValue::Object exp; exp["logLevel"] = std::make_shared<JSONValue>(std::string("WARN"));
-    JSONValue::Object caps; caps["experimental"] = std::make_shared<JSONValue>(exp);
-    JSONValue::Object root; root["capabilities"] = std::make_shared<JSONValue>(caps);
-    init->params.emplace(root);
+    init->params.emplace(JSONValue::Object{});
     auto initRespFut = client->SendRequest(std::move(init));
     ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto setReq = std::make_unique<JSONRPCRequest>(); setReq->method = Methods::SetLogLevel; { JSONValue::Object p; p["level"] = std::make_shared<JSONValue>(std::string("warning")); setReq->params.emplace(JSONValue{p}); }
+    auto setRespFut = client->SendRequest(std::move(setReq)); ASSERT_EQ(setRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 
     // Send unknown level like TRACE -> maps to DEBUG -> should be suppressed
     server.LogToClient("TRACE", "nope", std::nullopt);
@@ -160,7 +165,7 @@ TEST(ServerLogging, DeliversWarnWithStructuredData) {
     auto client = std::move(pair.first);
     auto serverTrans = std::move(pair.second);
 
-    // Capture notifications/log on client side
+    // Capture notifications/message on client side
     std::promise<JSONValue> gotPayload; auto payloadFut = gotPayload.get_future();
 
     client->SetNotificationHandler([&](std::unique_ptr<JSONRPCNotification> note){
@@ -178,15 +183,14 @@ TEST(ServerLogging, DeliversWarnWithStructuredData) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize with client capabilities.experimental.logLevel = "WARN"
+    // Initialize and set level to warning
     auto init = std::make_unique<JSONRPCRequest>();
     init->method = Methods::Initialize;
-    JSONValue::Object exp; exp["logLevel"] = std::make_shared<JSONValue>(std::string("WARN"));
-    JSONValue::Object caps; caps["experimental"] = std::make_shared<JSONValue>(exp);
-    JSONValue::Object root; root["capabilities"] = std::make_shared<JSONValue>(caps);
-    init->params.emplace(root);
+    init->params.emplace(JSONValue::Object{});
     auto initRespFut = client->SendRequest(std::move(init));
     ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto setReq = std::make_unique<JSONRPCRequest>(); setReq->method = Methods::SetLogLevel; { JSONValue::Object p; p["level"] = std::make_shared<JSONValue>(std::string("warning")); setReq->params.emplace(JSONValue{p}); }
+    auto setRespFut = client->SendRequest(std::move(setReq)); ASSERT_EQ(setRespFut.wait_for(std::chrono::seconds(1)), std::future_status::ready);
 
     // Send WARN with structured data (should be delivered at threshold)
     JSONValue::Object dataObj;
@@ -201,12 +205,7 @@ TEST(ServerLogging, DeliversWarnWithStructuredData) {
     auto itLvl = o.find("level");
     ASSERT_TRUE(itLvl != o.end());
     ASSERT_TRUE(std::holds_alternative<std::string>(itLvl->second->value));
-    EXPECT_EQ(std::get<std::string>(itLvl->second->value), std::string("WARN"));
-
-    auto itMsg = o.find("message");
-    ASSERT_TRUE(itMsg != o.end());
-    ASSERT_TRUE(std::holds_alternative<std::string>(itMsg->second->value));
-    EXPECT_EQ(std::get<std::string>(itMsg->second->value), std::string("warn-message"));
+    EXPECT_EQ(std::get<std::string>(itLvl->second->value), std::string("warning"));
 
     auto itData = o.find("data");
     ASSERT_TRUE(itData != o.end());
@@ -239,7 +238,7 @@ TEST(ServerLogging, DefaultLogLevelAllowsInfo) {
             const auto& v = note->params.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& o = std::get<JSONValue::Object>(v.value);
-                auto it = o.find("message");
+                auto it = o.find("data");
                 if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
                     try {
                         gotInfo.set_value(std::get<std::string>(it->second->value));
@@ -282,7 +281,7 @@ TEST(ServerLogging, InvalidClientLogLevelFallsBackToDebug) {
             const auto& v = note->params.value();
             if (std::holds_alternative<JSONValue::Object>(v.value)) {
                 const auto& o = std::get<JSONValue::Object>(v.value);
-                auto it = o.find("message");
+                auto it = o.find("data");
                 if (it != o.end() && std::holds_alternative<std::string>(it->second->value)) {
                     try {
                         gotInfo.set_value(std::get<std::string>(it->second->value));
@@ -297,17 +296,13 @@ TEST(ServerLogging, InvalidClientLogLevelFallsBackToDebug) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize with an invalid experimental.logLevel; server should default to DEBUG min
-    auto init = std::make_unique<JSONRPCRequest>();
-    init->method = Methods::Initialize;
-    JSONValue::Object exp; exp["logLevel"] = std::make_shared<JSONValue>(std::string("NOPE"));
-    JSONValue::Object caps; caps["experimental"] = std::make_shared<JSONValue>(exp);
-    JSONValue::Object root; root["capabilities"] = std::make_shared<JSONValue>(caps);
-    init->params.emplace(root);
-    auto initRespFut = client->SendRequest(std::move(init));
-    ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    // Initialize and attempt an invalid logging/setLevel; server responds error; default min remains DEBUG
+    auto init = std::make_unique<JSONRPCRequest>(); init->method = Methods::Initialize; init->params.emplace(JSONValue::Object{});
+    auto initRespFut = client->SendRequest(std::move(init)); ASSERT_EQ(initRespFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    auto badReq = std::make_unique<JSONRPCRequest>(); badReq->method = Methods::SetLogLevel; { JSONValue::Object p; p["level"] = std::make_shared<JSONValue>(std::string("NOPE")); badReq->params.emplace(JSONValue{p}); }
+    (void)client->SendRequest(std::move(badReq));
 
-    // INFO should be delivered because min falls back to DEBUG
+    // INFO should be delivered because min remains DEBUG
     server.LogToClient("INFO", "info-delivered", std::nullopt);
     ASSERT_EQ(gotInfoFut.wait_for(std::chrono::seconds(2)), std::future_status::ready);
     EXPECT_EQ(gotInfoFut.get(), std::string("info-delivered"));
@@ -326,7 +321,7 @@ TEST(ServerLogging, OmitsDataFieldWhenNotProvided) {
         if (!note) {
             return;
         }
-        if (note->method == Methods::Log && note->params.has_value()) {
+        if (note && note->method == Methods::Log && note->params.has_value()) {
             try {
                 gotPayload.set_value(note->params.value());
             } catch (...) {
@@ -338,7 +333,7 @@ TEST(ServerLogging, OmitsDataFieldWhenNotProvided) {
     server.Start(std::move(serverTrans)).get();
     client->Start().get();
 
-    // Initialize without logLevel capability; default min is DEBUG so INFO is allowed
+    // Initialize; default min is DEBUG so INFO is allowed
     auto init = std::make_unique<JSONRPCRequest>();
     init->method = Methods::Initialize;
     init->params.emplace(JSONValue::Object{});
@@ -350,8 +345,11 @@ TEST(ServerLogging, OmitsDataFieldWhenNotProvided) {
     JSONValue v = payloadFut.get();
     ASSERT_TRUE(std::holds_alternative<JSONValue::Object>(v.value));
     const auto& o = std::get<JSONValue::Object>(v.value);
-    // Ensure 'data' key is absent
-    EXPECT_TRUE(o.find("data") == o.end());
+    // Ensure 'data' key is present and equals the message string per spec
+    auto itData = o.find("data");
+    ASSERT_TRUE(itData != o.end());
+    ASSERT_TRUE(std::holds_alternative<std::string>(itData->second->value));
+    EXPECT_EQ(std::get<std::string>(itData->second->value), std::string("no-data"));
 
     client->Close().get();
     server.Stop().get();

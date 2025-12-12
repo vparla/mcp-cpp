@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Vinny Parla
 # File: tests/CMakeLists.txt
+# Purpose: Build and run tests for mcp_cpp
 #==========================================================================================================
 
 
@@ -24,8 +25,11 @@ add_executable(mcp_tests
   test_resource_templates.cpp
   test_prompts_get.cpp
   test_tools_inputschema.cpp
+  test_capabilities_extensions.cpp
+  test_tools_meta.cpp
   test_sampling_handler.cpp
   test_read_resource.cpp
+  test_resources_ui.cpp
   test_keepalive_threshold_config.cpp
   test_negative_api.cpp
   test_client_paging.cpp
@@ -70,6 +74,7 @@ add_executable(mcp_tests
   test_inmemory_concurrency.cpp
   test_stdio_writer.cpp
   test_http_transport_errors.cpp
+  test_www_authenticate.cpp
   )
 
 target_link_libraries(mcp_tests

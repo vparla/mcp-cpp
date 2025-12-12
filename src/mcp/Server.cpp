@@ -50,6 +50,7 @@ private:
     mcp::async::Task<void> coNotifyResourceUpdated(const std::string& uri);
     mcp::async::Task<void> coSendProgress(const std::string& token, double progress, const std::string& message);
     mcp::async::Task<void> coLogToClient(const std::string& level, const std::string& message, const std::optional<JSONValue>& data);
+    std::unique_ptr<JSONRPCResponse> handleSetLogLevel(const JSONRPCRequest& req);
     std::unique_ptr<ITransport> transport;
     ServerCapabilities capabilities;
     ClientCapabilities clientCapabilities;
@@ -174,6 +175,9 @@ private:
         to["description"] = std::make_shared<JSONValue>(t.description);
         // inputSchema may be empty JSONValue
         to["inputSchema"] = std::make_shared<JSONValue>(t.inputSchema);
+        if (t.meta.has_value()) {
+            to["_meta"] = std::make_shared<JSONValue>(t.meta.value());
+        }
         return to;
     }
 
@@ -299,8 +303,16 @@ private:
     { //scope guard
         std::lock_guard<std::mutex> lock(this->registryMutex);
         resources.reserve(this->resourceUris.size());
+        bool uiSupported = (this->clientCapabilities.extensions.find(Extensions::uiExtensionId) != this->clientCapabilities.extensions.end());
         for (const auto& uri : this->resourceUris) {
-            resources.emplace_back(uri, std::string("Resource: ") + uri);
+            if (uri.rfind("ui://", 0) == 0) {
+                if (!uiSupported) { 
+                    continue;
+                }
+                resources.emplace_back(uri, std::string("Resource: ") + uri, std::nullopt, std::optional<std::string>{std::string("text/html+mcp")});
+            } else {
+                resources.emplace_back(uri, std::string("Resource: ") + uri);
+            }
         }
     }
     std::sort(resources.begin(), resources.end(), [](const Resource& a, const Resource& b){ return a.uri < b.uri; });
@@ -531,7 +543,20 @@ private:
         return errors::makeErrorResponse(req.id, err);
     }
 
-    // Build result (optionally applying experimental chunking)
+    // Generate result (optionally applying experimental chunking)
+    bool hasMeta = false;
+    JSONValue metaCandidate;
+    for (const auto& v : rr.contents) {
+        if (std::holds_alternative<JSONValue::Object>(v.value)) {
+            const auto& o = std::get<JSONValue::Object>(v.value);
+            auto itMeta = o.find("_meta");
+            if (itMeta != o.end() && itMeta->second) {
+                metaCandidate = *(itMeta->second);
+                hasMeta = true;
+                break;
+            }
+        }
+    }
     JSONValue::Object obj;
     JSONValue::Array contents;
     if (!offsetOpt.has_value() && !lengthOpt.has_value()) {
@@ -592,6 +617,19 @@ private:
         }
     }
     obj["contents"] = std::make_shared<JSONValue>(contents);
+    if (hasMeta) {
+        bool uiSupported = (this->clientCapabilities.extensions.find(Extensions::uiExtensionId) != this->clientCapabilities.extensions.end());
+        if (!uiSupported && std::holds_alternative<JSONValue::Object>(metaCandidate.value)) {
+            auto metaObj = std::get<JSONValue::Object>(metaCandidate.value);
+            auto itUi = metaObj.find("ui");
+            if (itUi != metaObj.end()) { metaObj.erase(itUi); }
+            if (!metaObj.empty()) {
+                obj["_meta"] = std::make_shared<JSONValue>(JSONValue{metaObj});
+            }
+        } else {
+            obj["_meta"] = std::make_shared<JSONValue>(metaCandidate);
+        }
+    }
     JSONValue result{obj};
     if (this->validationMode == validation::ValidationMode::Strict) {
         if (!validation::validateReadResourceResultJson(result)) {
@@ -809,13 +847,15 @@ private:
                 if (samplingIt != capsObj.end()) {
                     clientCapabilities.sampling = SamplingCapability{};
                 }
-                // Parse experimental.logLevel
-                auto expIt = capsObj.find("experimental");
-                if (expIt != capsObj.end() && std::holds_alternative<JSONValue::Object>((*expIt->second).value)) {
-                    const auto& expObj = std::get<JSONValue::Object>((*expIt->second).value);
-                    auto llIt = expObj.find("logLevel");
-                    if (llIt != expObj.end() && std::holds_alternative<std::string>(llIt->second->value)) {
-                        this->clientLogMin.store(Logger::levelFromString(std::get<std::string>(llIt->second->value)));
+                // Parse extensions (optional per SEP-1724), store verbatim as JSONValue by key
+                auto extIt = capsObj.find("extensions");
+                if (extIt != capsObj.end() && std::holds_alternative<JSONValue::Object>((*extIt->second).value)) {
+                    const auto& extObj = std::get<JSONValue::Object>((*extIt->second).value);
+                    clientCapabilities.extensions.clear();
+                    for (const auto& kv : extObj) {
+                        if (kv.second) {
+                            clientCapabilities.extensions[kv.first] = *(kv.second);
+                        }
                     }
                 }
             }
@@ -933,6 +973,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
                 this->sendInitializedAndListChangedAsync();
             }
             return resp;
+        } else if (req.method == Methods::SetLogLevel) {
+            return this->handleSetLogLevel(req);
         } else if (req.method == Methods::ListTools) {
             return this->handleToolsList(req);
         } else if (req.method == Methods::CallTool) {
@@ -1236,10 +1278,30 @@ mcp::async::Task<JSONValue> Server::Impl::coReadResource(const std::string& uri)
         ResourceContent result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         JSONValue::Object resultObj;
         JSONValue::Array contentsArray;
+        bool hasMeta = false;
+        JSONValue metaCandidate;
         for (auto& v : result.contents) {
+            if (!hasMeta && std::holds_alternative<JSONValue::Object>(v.value)) {
+                const auto& o = std::get<JSONValue::Object>(v.value);
+                auto itMeta = o.find("_meta");
+                if (itMeta != o.end() && itMeta->second) { metaCandidate = *(itMeta->second); hasMeta = true; }
+            }
             contentsArray.push_back(std::make_shared<JSONValue>(std::move(v)));
         }
         resultObj["contents"] = std::make_shared<JSONValue>(contentsArray);
+        if (hasMeta) {
+            bool uiSupported = (this->clientCapabilities.extensions.find(Extensions::uiExtensionId) != this->clientCapabilities.extensions.end());
+            if (!uiSupported && std::holds_alternative<JSONValue::Object>(metaCandidate.value)) {
+                auto mo = std::get<JSONValue::Object>(metaCandidate.value);
+                auto itUi = mo.find("ui");
+                if (itUi != mo.end()) { mo.erase(itUi); }
+                if (!mo.empty()) {
+                    resultObj["_meta"] = std::make_shared<JSONValue>(JSONValue{mo});
+                }
+            } else {
+                resultObj["_meta"] = std::make_shared<JSONValue>(metaCandidate);
+            }
+        }
         co_return JSONValue{resultObj};
     }
     co_return JSONValue{nullptr};
@@ -1347,8 +1409,12 @@ mcp::async::Task<void> Server::Impl::coSendProgress(const std::string& token, do
 mcp::async::Task<void> Server::Impl::coLogToClient(const std::string& level, const std::string& message, const std::optional<JSONValue>& data) {
     FUNC_SCOPE();
     Logger::Level sev = Logger::levelFromString(level);
-    if (sev < this->clientLogMin.load()) {
-        co_return; // Suppressed
+    Logger::Level min = this->clientLogMin.load();
+    if (sev < min) {
+        // Always allow error-or-higher through even if a misconfiguration would otherwise suppress.
+        if (!(sev == Logger::Level::ERROR || sev == Logger::Level::FATAL)) {
+            co_return; // Suppressed
+        }
     }
     // Apply simple per-second rate limiting if enabled
     {
@@ -1366,11 +1432,24 @@ mcp::async::Task<void> Server::Impl::coLogToClient(const std::string& level, con
             ++this->logWindowCount;
         }
     }
+    // Build spec-compliant payload for notifications/message
     JSONValue::Object obj;
-    obj["level"] = std::make_shared<JSONValue>(level);
-    obj["message"] = std::make_shared<JSONValue>(message);
+    // Map internal level to spec LoggingLevel strings (lowercase)
+    std::string specLevel = "info";
+    switch (sev) {
+        case Logger::Level::DEBUG: specLevel = "debug"; break;
+        case Logger::Level::INFO:  specLevel = "info"; break;
+        case Logger::Level::WARN:  specLevel = "warning"; break;
+        case Logger::Level::ERROR: specLevel = "error"; break;
+        case Logger::Level::FATAL: specLevel = "critical"; break;
+        default: specLevel = "info"; break;
+    }
+    obj["level"] = std::make_shared<JSONValue>(specLevel);
+    // 'data' is required by spec; use provided data if present, else the message string
     if (data.has_value()) {
         obj["data"] = std::make_shared<JSONValue>(data.value());
+    } else {
+        obj["data"] = std::make_shared<JSONValue>(message);
     }
     {
         auto fut = this->coSendNotification(Methods::Log, JSONValue{obj}).toFuture();
@@ -1380,6 +1459,43 @@ mcp::async::Task<void> Server::Impl::coLogToClient(const std::string& level, con
         }
     }
     co_return;
+}
+
+std::unique_ptr<JSONRPCResponse> Server::Impl::handleSetLogLevel(const JSONRPCRequest& req) {
+    LOG_DEBUG("Handling logging/setLevel request");
+    // Validate params
+    if (!req.params.has_value() || !std::holds_alternative<JSONValue::Object>(req.params->value)) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    const auto& o = std::get<JSONValue::Object>(req.params->value);
+    auto it = o.find("level");
+    if (it == o.end() || !it->second || !std::holds_alternative<std::string>(it->second->value)) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Missing or invalid 'level'";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    std::string lvl = std::get<std::string>(it->second->value);
+    // normalize to lowercase
+    for (char& c : lvl) { c = static_cast<char>(::tolower(static_cast<unsigned char>(c))); }
+    // Map spec LoggingLevel to internal threshold
+    Logger::Level minLevel = Logger::Level::INFO;
+    if (lvl == "debug") {
+        minLevel = Logger::Level::DEBUG;
+    } else if (lvl == "info" || lvl == "notice") {
+        minLevel = Logger::Level::INFO;
+    } else if (lvl == "warning") {
+        minLevel = Logger::Level::WARN;
+    } else if (lvl == "error" || lvl == "critical" || lvl == "alert" || lvl == "emergency") {
+        minLevel = Logger::Level::ERROR;
+    } else {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Unknown logging level";
+        return errors::makeErrorResponse(req.id, e);
+    }
+    this->clientLogMin.store(minLevel);
+    auto resp = std::make_unique<JSONRPCResponse>();
+    resp->id = req.id;
+    resp->result = JSONValue{JSONValue::Object{}}; // empty object result
+    return resp;
 }
 
 mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessage(const CreateMessageParams& params) {
@@ -1736,8 +1852,14 @@ std::vector<Resource> Server::ListResources() {
     FUNC_SCOPE();
     std::lock_guard<std::mutex> lock(pImpl->registryMutex);
     std::vector<Resource> resources;
+    bool uiSupported = (pImpl->clientCapabilities.extensions.find(Extensions::uiExtensionId) != pImpl->clientCapabilities.extensions.end());
     for (const auto& uri : pImpl->resourceUris) {
-        resources.emplace_back(uri, "Resource: " + uri);
+        if (uri.rfind("ui://", 0) == 0) {
+            if (!uiSupported) { continue; }
+            resources.emplace_back(uri, std::string("Resource: ") + uri, std::nullopt, std::optional<std::string>{std::string("text/html+mcp")});
+        } else {
+            resources.emplace_back(uri, std::string("Resource: ") + uri);
+        }
     }
     return resources;
 }

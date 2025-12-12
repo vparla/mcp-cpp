@@ -378,11 +378,20 @@ std::future<std::unique_ptr<JSONRPCResponse>> SharedMemoryTransport::SendRequest
     if (!callerSetId) {
         // Simple request id generator with wrap handling
         static std::atomic<unsigned long long> counter{0ull};
-        unsigned long long n = counter.fetch_add(1ull, std::memory_order_relaxed) + 1ull;
-        if (n == 0ull) {
-            // Wrapped around; reset to 1 to avoid an empty/duplicate suffix
-            counter.store(1ull, std::memory_order_relaxed);
-            n = 1ull;
+        unsigned long long n = 0ull;
+        unsigned long long old = counter.load(std::memory_order_relaxed);
+        for (;;) {
+            unsigned long long next;
+            if (old == std::numeric_limits<unsigned long long>::max()) {
+                next = 1ull;
+            } else {
+                // Safe increment: old < max so this cannot overflow
+                next = old + 1ull;
+            }
+            if (counter.compare_exchange_weak(old, next, std::memory_order_relaxed, std::memory_order_relaxed)) {
+                n = next;
+                break;
+            }
         }
         requestId = std::string("shm-req-") + std::to_string(n);
         request->id = requestId;

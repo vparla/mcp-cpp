@@ -12,6 +12,8 @@
 #include <future>
 #include <atomic>
 #include <functional>
+#include <optional>
+#include <vector>
 
 #include "mcp/Transport.h"
 #include "mcp/auth/IAuth.hpp"
@@ -24,6 +26,17 @@ namespace mcp {
 //==========================================================================================================
 class HTTPTransport : public ITransport {
 public:
+    //==========================================================================================================
+    // HttpResponseInfo
+    // Purpose: Exposes HTTP status and headers from the last completed HTTP request. Used for auth discovery
+    //          (e.g., parsing WWW-Authenticate on 401/403).
+    //==========================================================================================================
+    struct HttpResponseInfo {
+        int status{0};
+        std::vector<mcp::auth::HeaderKV> headers;
+        std::string wwwAuthenticate; // convenience copy of WWW-Authenticate if present
+    };
+    
     //==========================================================================================================
     // Options
     // Purpose: Configuration for HTTP/HTTPS endpoints and TLS verification.
@@ -114,6 +127,13 @@ public:
     void SetErrorHandler(ErrorHandler handler) override;
     void SetAuth(mcp::auth::IAuth& auth);
     void SetAuth(std::shared_ptr<mcp::auth::IAuth> auth);
+
+    //==========================================================================================================
+    // TryGetLastHttpResponse
+    // Purpose: Copies the last observed HTTP response info (if any). Returns true on success.
+    //          Thread-safe; returns a snapshot and does not clear the stored value.
+    //==========================================================================================================
+    bool QueryLastHttpResponse(HttpResponseInfo& out) const;
 
 private:
     class Impl;

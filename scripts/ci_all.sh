@@ -34,6 +34,7 @@ echo "[ci_all] 1b/3 List discovered unit/integration tests"
 docker run --rm \
   -e GTEST_COLOR=yes \
   -e CTEST_OUTPUT_ON_FAILURE=1 \
+  -e MCP_IN_CONTAINER=1 \
   --ipc=host \
   mcp-cpp-build \
   ctest --test-dir build -N -V
@@ -43,6 +44,7 @@ echo "[ci_all] 1c/3 Run unit/integration tests verbosely"
 docker run --rm \
   -e GTEST_COLOR=yes \
   -e CTEST_OUTPUT_ON_FAILURE=1 \
+  -e MCP_IN_CONTAINER=1 \
   --ipc=host \
   mcp-cpp-build \
   ctest --test-dir build -VV --progress
@@ -64,3 +66,4 @@ chmod +x scripts/http_e2e.sh scripts/http_down.sh
 ./scripts/http_down.sh || true
 
 echo "[ci_all] SUCCESS: All tests passed"
+

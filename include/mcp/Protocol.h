@@ -20,7 +20,13 @@ namespace mcp {
 //==========================================================================================================
 ///////////////////////////////////////// Protocol constants ///////////////////////////////////////////
 // MCP Protocol version
-constexpr const char* PROTOCOL_VERSION = "2025-06-18";
+constexpr const char* PROTOCOL_VERSION = "2025-11-25";
+
+// MCP Extensions identifiers (optional capability negotiation)
+namespace Extensions {
+    // UI apps extension identifier (SEP-1865)
+    constexpr const char* uiExtensionId = "io.modelcontextprotocol/ui";
+}
 
 ///////////////////////////////////////// Implementation ///////////////////////////////////////////
 // Implementation information
@@ -70,6 +76,8 @@ struct ServerCapabilities {
 struct ClientCapabilities {
     std::optional<SamplingCapability> sampling;
     std::unordered_map<std::string, JSONValue> experimental;
+    // Optional negotiated extensions per SEP-1724 (e.g., io.modelcontextprotocol/ui)
+    std::unordered_map<std::string, JSONValue> extensions;
 };
 
 ///////////////////////////////////////// Tools ///////////////////////////////////////////
@@ -78,10 +86,13 @@ struct Tool {
     std::string name;
     std::string description;
     JSONValue inputSchema;  // JSON Schema for tool parameters
+    std::optional<JSONValue> meta; // serialized as _meta in tools/list
     
     Tool() = default;
-    Tool(std::string name, std::string description, JSONValue inputSchema = JSONValue{})
-        : name(std::move(name)), description(std::move(description)), inputSchema(std::move(inputSchema)) {}
+    Tool(std::string name, std::string description, JSONValue inputSchema = JSONValue{},
+         std::optional<JSONValue> metaValue = std::nullopt)
+        : name(std::move(name)), description(std::move(description)),
+          inputSchema(std::move(inputSchema)), meta(std::move(metaValue)) {}
 };
 
 struct CallToolParams {
@@ -234,6 +245,7 @@ namespace Methods {
     constexpr const char* ReadResource = "resources/read";
     constexpr const char* Subscribe = "resources/subscribe";
     constexpr const char* Unsubscribe = "resources/unsubscribe";
+    constexpr const char* SetLogLevel = "logging/setLevel";
     constexpr const char* ListResourceTemplates = "resources/templates/list";
     constexpr const char* ListPrompts = "prompts/list";
     constexpr const char* GetPrompt = "prompts/get";
@@ -245,7 +257,7 @@ namespace Methods {
     constexpr const char* Initialized = "notifications/initialized";
     constexpr const char* Progress = "notifications/progress";
     constexpr const char* Keepalive = "notifications/keepalive";
-    constexpr const char* Log = "notifications/log";
+    constexpr const char* Log = "notifications/message";
     constexpr const char* ResourceListChanged = "notifications/resources/list_changed";
     constexpr const char* ToolListChanged = "notifications/tools/list_changed";
     constexpr const char* PromptListChanged = "notifications/prompts/list_changed";

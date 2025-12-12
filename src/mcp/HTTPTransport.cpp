@@ -69,6 +69,10 @@ public:
     std::shared_ptr<mcp::auth::IAuth> authStrong;
     mcp::auth::IAuth* authWeak{nullptr};
 
+    // Snapshot of the last HTTP response (status + headers) for auth discovery
+    mutable std::mutex lastRespMutex;
+    HTTPTransport::HttpResponseInfo lastResp;
+
     explicit Impl(const HTTPTransport::Options& o) : opts(o) {
         // Random session id similar to InMemoryTransport
         std::random_device rd; std::mt19937 gen(rd()); std::uniform_int_distribution<> dis(1000, 9999);
@@ -128,6 +132,25 @@ public:
         if (ioThread.joinable()) {
             ioc.stop();
             ioThread.join();
+        }
+    }
+
+    void recordResponse(const http::response<http::string_body>& res) {
+        HTTPTransport::HttpResponseInfo info;
+        info.status = static_cast<int>(res.result_int());
+        for (const auto& h : res.base()) {
+            mcp::auth::HeaderKV kv;
+            kv.name = std::string(h.name_string());
+            kv.value = std::string(h.value());
+            info.headers.push_back(std::move(kv));
+        }
+        auto const& wa = res[http::field::www_authenticate];
+        if (!wa.empty()) {
+            info.wwwAuthenticate = std::string(wa);
+        }
+        {
+            std::lock_guard<std::mutex> lk(lastRespMutex);
+            lastResp = std::move(info);
         }
     }
 
@@ -229,6 +252,7 @@ public:
                 if (errorHandler) {
                     errorHandler(std::string("HTTP DEBUG: https status=") + std::to_string(res.result_int()) + std::string(" content-type=") + std::string(res[http::field::content_type]));
                 }
+                recordResponse(res);
                 boost::system::error_code ec; stream.shutdown(ec);
                 co_return res.body();
             } else {
@@ -277,6 +301,7 @@ public:
                 if (errorHandler) {
                     errorHandler(std::string("HTTP DEBUG: http status=") + std::to_string(res.result_int()) + std::string(" content-type=") + std::string(res[http::field::content_type]));
                 }
+                recordResponse(res);
                 boost::system::error_code ec; stream.socket().shutdown(tcp::socket::shutdown_both, ec);
                 co_return res.body();
             }
@@ -604,6 +629,29 @@ void HTTPTransport::SetAuth(std::shared_ptr<mcp::auth::IAuth> auth) {
     if (pImpl->errorHandler && pImpl->authStrong) {
         pImpl->authStrong->setErrorHandler(pImpl->errorHandler);
     }
+}
+
+bool HTTPTransport::QueryLastHttpResponse(HttpResponseInfo& out) const {
+    FUNC_SCOPE();
+    // Rationale: return true as soon as ANY meaningful part of the last HTTP response snapshot
+    // is available (OR semantics), rather than requiring ALL fields (AND semantics).
+    // - Real responses may legitimately omit fields (e.g., 200 OK has no WWW-Authenticate).
+    // - We record status/headers opportunistically; OR semantics avoids false negatives and remains
+    //   resilient if future changes only capture a subset (e.g., headers or a challenge line).
+    {
+        std::lock_guard<std::mutex> lk(pImpl->lastRespMutex);
+        out = pImpl->lastResp;
+    }
+    if (out.status != 0) {
+        return true;
+    }
+    if (!out.headers.empty()) {
+        return true;
+    }
+    if (!out.wwwAuthenticate.empty()) {
+        return true;
+    }
+    return false;
 }
 
 //==========================================================================================================

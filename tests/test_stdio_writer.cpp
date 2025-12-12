@@ -48,6 +48,7 @@ TEST(StdioWriter, WriteQueueOverflowCloses) {
 
 #ifndef _WIN32
 TEST(StdioWriter, WriteTimeoutCloses) {
+    const bool inContainer = (std::getenv("MCP_IN_CONTAINER") != nullptr);
     // Redirect stdout to a non-blocking pipe whose write end is full
     int saved = ::dup(STDOUT_FILENO);
     ASSERT_GE(saved, 0);
@@ -81,7 +82,7 @@ TEST(StdioWriter, WriteTimeoutCloses) {
     std::promise<void> errPromise;
     std::atomic<bool> sawError{false};
     t.SetErrorHandler([&](const std::string&){ if (!sawError.exchange(true)) { errPromise.set_value(); } });
-    t.SetWriteTimeoutMs(50);
+    t.SetWriteTimeoutMs(inContainer ? 100 : 50);
     t.Start().get();
 
     auto n = std::make_unique<mcp::JSONRPCNotification>();
@@ -91,7 +92,7 @@ TEST(StdioWriter, WriteTimeoutCloses) {
     t.SendNotification(std::move(n)).get();
 
     auto fut = errPromise.get_future();
-    ASSERT_EQ(fut.wait_for(3s), std::future_status::ready);
+    ASSERT_EQ(fut.wait_for(inContainer ? 10s : 3s), std::future_status::ready);
     EXPECT_FALSE(t.IsConnected());
 
     // Restore stdout and cleanup

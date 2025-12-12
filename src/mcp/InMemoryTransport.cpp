@@ -80,17 +80,20 @@ public:
     void processMessage(const std::string& message) {
         LOG_DEBUG("Processing in-memory message: {}", message);
 
-        // First, handle responses (have top-level result or error)
-        if (message.find("\"result\"") != std::string::npos || message.find("\"error\"") != std::string::npos) {
+        // Classify the message using the router to avoid false positives on nested keys/values.
+        auto kind = router ? router->classify(message) : IJsonRpcMessageRouter::MessageKind::Unknown;
+
+        // Handle responses (top-level result or error)
+        if (kind == IJsonRpcMessageRouter::MessageKind::Response) {
             JSONRPCResponse response;
             if (response.Deserialize(message)) {
                 handleResponse(std::move(response));
                 return;
             }
         }
-        // Next, handle requests: must have a method and a TOP-LEVEL id
-        if (message.find("\"method\"") != std::string::npos && router &&
-            router->classify(message) == IJsonRpcMessageRouter::MessageKind::Request) {
+
+        // Handle requests (must have method and top-level id)
+        if (kind == IJsonRpcMessageRouter::MessageKind::Request) {
             JSONRPCRequest request;
             if (request.Deserialize(message)) {
                 if (requestHandler) {
@@ -119,7 +122,8 @@ public:
                 }
             }
         }
-        // Finally, treat as notification
+
+        // Finally, notification
         {
             JSONRPCNotification notification;
             if (notification.Deserialize(message)) {

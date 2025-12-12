@@ -32,25 +32,28 @@ int main() {
     auto client = factory.CreateClient(info);
     client->Connect(std::move(clientTrans)).get();
 
-    // Capture log notifications on client
+    // Capture log notifications (notifications/message): level + data
     client->SetNotificationHandler(Methods::Log, [&](const std::string& method, const JSONValue& params){
         (void)method;
         if (std::holds_alternative<JSONValue::Object>(params.value)) {
             const auto& o = std::get<JSONValue::Object>(params.value);
             auto itLvl = o.find("level");
-            auto itMsg = o.find("message");
-            if (itLvl != o.end() && itMsg != o.end() &&
-                std::holds_alternative<std::string>(itLvl->second->value) &&
-                std::holds_alternative<std::string>(itMsg->second->value)) {
-                std::cout << "log [" << std::get<std::string>(itLvl->second->value) << "]: "
-                          << std::get<std::string>(itMsg->second->value) << "\n";
+            auto itData = o.find("data");
+            if (itLvl != o.end() && itData != o.end() &&
+                std::holds_alternative<std::string>(itLvl->second->value)) {
+                std::cout << "log [" << std::get<std::string>(itLvl->second->value) << "]: ";
+                if (std::holds_alternative<std::string>(itData->second->value)) {
+                    std::cout << std::get<std::string>(itData->second->value);
+                } else {
+                    std::cout << "(non-string payload)";
+                }
+                std::cout << "\n";
             }
         }
     });
 
-    // Initialize with client min log level WARN
-    ClientCapabilities caps; caps.experimental["logLevel"] = JSONValue{std::string("WARN")};
-    (void)client->Initialize(info, caps).get();
+    // Initialize client
+    ClientCapabilities caps; (void)client->Initialize(info, caps).get();
 
     // INFO should be suppressed, ERROR delivered
     server.LogToClient("INFO", "info suppressed", std::nullopt);

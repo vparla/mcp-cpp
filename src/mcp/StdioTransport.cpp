@@ -903,6 +903,15 @@ public:
                         break;
                     }
 #else
+                    // POSIX: enforce a top-level per-frame timeout (in addition to checks inside writeChunkPosix)
+                    if (writeTimeout.count() > 0) {
+                        auto elapsed = std::chrono::steady_clock::now() - start;
+                        if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed) >= writeTimeout) {
+                            if (errorHandler) { errorHandler("StdioTransport: write timeout"); }
+                            connected = false;
+                            break;
+                        }
+                    }
                     if (!writeChunkPosix(frame, total, start)) {
                         break;
                     }
