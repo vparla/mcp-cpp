@@ -1089,7 +1089,8 @@ std::future<void> StdioTransport::Close() {
 
     if (pImpl->readerThread.joinable()) {
         if (std::this_thread::get_id() == pImpl->readerThread.get_id()) {
-            LOG_WARN("StdioTransport::Close called from reader thread; skipping join");
+            LOG_WARN("StdioTransport::Close called from reader thread; detaching");
+            pImpl->readerThread.detach();
         } else {
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
             {
@@ -1108,7 +1109,8 @@ std::future<void> StdioTransport::Close() {
         // Wake writer
         pImpl->cvWrite.notify_all();
         if (std::this_thread::get_id() == pImpl->writerThread.get_id()) {
-            LOG_WARN("StdioTransport::Close called from writer thread; skipping join");
+            LOG_WARN("StdioTransport::Close called from writer thread; detaching");
+            pImpl->writerThread.detach();
         } else {
             auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
             {

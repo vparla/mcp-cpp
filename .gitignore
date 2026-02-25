@@ -108,3 +108,6 @@ build-issues.md
 # Local CI artifacts
 .ci/
 .ci/*.tar
+
+# Local planning artifacts (gitignored by request)
+planning/

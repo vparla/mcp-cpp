@@ -41,6 +41,7 @@ struct ClientCapabilities;
 struct Tool;
 struct Resource;
 struct ResourceTemplate;
+struct Root;
 struct Prompt;
 
 //==========================================================================================================
@@ -325,6 +326,16 @@ public:
                                           const std::string& message,
                                           const std::optional<JSONValue>& data = std::nullopt) = 0;
 
+    ///////////////////////////////////////////// Roots (client capability) ///////////////////////////////////
+    //==========================================================================================================
+    // Requests the client roots/list payload (server -> client).
+    // Args:
+    //   (none)
+    // Returns:
+    //   Future with RootsListResult.
+    //==========================================================================================================
+    virtual std::future<RootsListResult> RequestRootsList() = 0;
+
     ///////////////////////////////////////// Server-initiated sampling ////////////////////////////////////////
     //==========================================================================================================
     // Requests the client to create a message via sampling/createMessage.
@@ -528,6 +539,8 @@ public:
     std::future<void> LogToClient(const std::string& level,
                                   const std::string& message,
                                   const std::optional<JSONValue>& data = std::nullopt) override;
+
+    std::future<RootsListResult> RequestRootsList() override;
 
     // Server-initiated sampling (request client to create a message)
     std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) override;

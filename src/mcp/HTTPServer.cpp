@@ -171,6 +171,29 @@ public:
         co_return;
     }
 
+    std::string buildResourceMetadataJson() const {
+        std::string json = std::string("{");
+        json += std::string("\"authorization_servers\":[");
+        for (size_t i = 0; i < bearerOptions.authorizationServers.size(); ++i) {
+            const std::string& v = bearerOptions.authorizationServers[i];
+            json += std::string("\"") + v + std::string("\"");
+            if (i + 1 < bearerOptions.authorizationServers.size()) {
+                json += std::string(",");
+            }
+        }
+        json += std::string("]");
+        json += std::string(",\"scopes_supported\":[");
+        for (size_t i = 0; i < bearerOptions.scopesSupported.size(); ++i) {
+            const std::string& v = bearerOptions.scopesSupported[i];
+            json += std::string("\"") + v + std::string("\"");
+            if (i + 1 < bearerOptions.scopesSupported.size()) {
+                json += std::string(",");
+            }
+        }
+        json += std::string("]}");
+        return json;
+    }
+
     //==========================================================================================================
     // enforceAuthAndScope
     // Purpose: Enforce optional Bearer authentication. On failure, populate 'res' with proper status,
@@ -194,7 +217,40 @@ public:
             res.result(http::status::unauthorized);
         }
         if (r.includeWWWAuthenticate && !bearerOptions.resourceMetadataUrl.empty()) {
-            const std::string www = std::string("Bearer resource_metadata=") + bearerOptions.resourceMetadataUrl;
+            auto joinScopes = [](const std::vector<std::string>& scopes){
+                std::string s;
+                for (size_t i = 0; i < scopes.size(); ++i) {
+                    s += scopes[i];
+                    if (i + 1 < scopes.size()) { s += std::string(" "); }
+                }
+                return s;
+            };
+            auto quote = [](const std::string& in){
+                std::string out; out.reserve(in.size() + 2);
+                out.push_back('"');
+                for (size_t i = 0; i < in.size(); ++i) {
+                    char ch = in[i];
+                    if (ch == '\\' || ch == '"') { out.push_back('\\'); }
+                    out.push_back(ch);
+                }
+                out.push_back('"');
+                return out;
+            };
+
+            std::string www = std::string("Bearer resource_metadata=") + bearerOptions.resourceMetadataUrl;
+            if (r.httpStatus == 403) {
+                www += std::string(", error=") + quote(std::string("insufficient_scope"));
+                if (!bearerOptions.requiredScopes.empty()) {
+                    www += std::string(", scope=") + quote(joinScopes(bearerOptions.requiredScopes));
+                }
+                if (!r.errorMessage.empty()) {
+                    www += std::string(", error_description=") + quote(r.errorMessage);
+                }
+            } else {
+                if (!bearerOptions.requiredScopes.empty()) {
+                    www += std::string(", scope=") + quote(joinScopes(bearerOptions.requiredScopes));
+                }
+            }
             res.set(http::field::www_authenticate, www);
         }
         res.body() = std::string("{\"error\":\"") + r.errorMessage + std::string("\"}");
@@ -286,6 +342,30 @@ public:
         res.set(http::field::content_type, "application/json");
         res.keep_alive(false);
 
+        const std::string target = std::string(req.target());
+
+        // Serve RFC 9728 metadata at well-known endpoints (GET)
+        std::string basePath = opts.rpcPath;
+        std::string rpcBase;
+        auto lastSlash = basePath.rfind('/');
+        if (lastSlash != std::string::npos) {
+            if (lastSlash > 0) { rpcBase = basePath.substr(0, lastSlash); }
+        }
+        const std::string wellKnownRoot = std::string("/.well-known/oauth-protected-resource");
+        const std::string wellKnownForBase = std::string("/.well-known/oauth-protected-resource") + (rpcBase.empty() ? std::string() : rpcBase);
+        if (target == wellKnownRoot || target == wellKnownForBase) {
+            if (req.method() != http::verb::get) {
+                res.result(http::status::method_not_allowed);
+                res.body() = std::string("{\"error\":\"GET required\"}");
+                res.prepare_payload();
+                return res;
+            }
+            res.result(http::status::ok);
+            res.body() = buildResourceMetadataJson();
+            res.prepare_payload();
+            return res;
+        }
+
         if (req.method() != http::verb::post) {
             res.result(http::status::bad_request);
             res.body() = std::string("{\"error\":\"POST required\"}");
@@ -293,7 +373,6 @@ public:
             return res;
         }
 
-        const std::string target = std::string(req.target());
         if (target == opts.rpcPath) {
             return handleRpc(req);
         }
@@ -430,6 +509,13 @@ void HTTPServer::SetNotificationHandler(ITransport::NotificationHandler handler)
 void HTTPServer::SetErrorHandler(ITransport::ErrorHandler handler) {
       pImpl->errorHandler = std::move(handler);
  }
+
+void HTTPServer::SetProtectedResourceMetadata(const mcp::auth::RequireBearerTokenOptions& opts) {
+    pImpl->bearerOptions.authorizationServers = opts.authorizationServers;
+    pImpl->bearerOptions.scopesSupported = opts.scopesSupported;
+    pImpl->bearerOptions.resourceMetadataUrl = opts.resourceMetadataUrl;
+    pImpl->bearerOptions.requiredScopes = opts.requiredScopes;
+}
 
 void HTTPServer::SetBearerAuth(mcp::auth::ITokenVerifier& verifier,
                        const mcp::auth::RequireBearerTokenOptions& opts) {

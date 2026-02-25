@@ -56,6 +56,10 @@ struct PromptsCapability {
     bool listChanged = false;
 };
 
+struct RootsCapability {
+    bool listChanged = false;
+};
+
 struct SamplingCapability {
     // Empty for now - may be extended in future
 };
@@ -74,6 +78,7 @@ struct ServerCapabilities {
 };
 
 struct ClientCapabilities {
+    std::optional<RootsCapability> roots;
     std::optional<SamplingCapability> sampling;
     std::unordered_map<std::string, JSONValue> experimental;
     // Optional negotiated extensions per SEP-1724 (e.g., io.modelcontextprotocol/ui)
@@ -146,6 +151,20 @@ struct ReadResourceResult {
     std::vector<JSONValue> contents;  // Array of resource contents
 };
 
+///////////////////////////////////////// Roots ///////////////////////////////////////////
+// Root structures
+struct Root {
+    std::string uri;
+    std::optional<std::string> name;
+    std::optional<JSONValue> meta; // serialized as _meta in roots/list
+
+    Root() = default;
+    Root(std::string uri,
+         std::optional<std::string> name = std::nullopt,
+         std::optional<JSONValue> metaValue = std::nullopt)
+        : uri(std::move(uri)), name(std::move(name)), meta(std::move(metaValue)) {}
+};
+
 ///////////////////////////////////////// Prompts ///////////////////////////////////////////
 // Prompt structures
 struct Prompt {
@@ -192,6 +211,10 @@ struct PromptsListResult {
     std::optional<std::string> nextCursor;
 };
 
+struct RootsListResult {
+    std::vector<Root> roots;
+};
+
 ///////////////////////////////////////// Sampling ///////////////////////////////////////////
 // Sampling structures (for LLM integration)
 struct CreateMessageParams {
@@ -234,6 +257,10 @@ struct PromptListChangedParams {
     // Empty - just signals that prompt list changed
 };
 
+struct RootListChangedParams {
+    // Empty - just signals that root list changed
+};
+
 ///////////////////////////////////////// Method names ///////////////////////////////////////////
 // MCP method names
 namespace Methods {
@@ -249,6 +276,7 @@ namespace Methods {
     constexpr const char* ListResourceTemplates = "resources/templates/list";
     constexpr const char* ListPrompts = "prompts/list";
     constexpr const char* GetPrompt = "prompts/get";
+    constexpr const char* ListRoots = "roots/list";
     
     // Server to client (sampling)
     constexpr const char* CreateMessage = "sampling/createMessage";
@@ -261,6 +289,7 @@ namespace Methods {
     constexpr const char* ResourceListChanged = "notifications/resources/list_changed";
     constexpr const char* ToolListChanged = "notifications/tools/list_changed";
     constexpr const char* PromptListChanged = "notifications/prompts/list_changed";
+    constexpr const char* RootListChanged = "notifications/roots/list_changed";
     constexpr const char* Cancelled = "notifications/cancelled";
 }
 

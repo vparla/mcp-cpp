@@ -79,6 +79,8 @@ namespace mcp {
     //==========================================================================================================
     void SetErrorHandler(ITransport::ErrorHandler handler) override;
 
+    void SetProtectedResourceMetadata(const mcp::auth::RequireBearerTokenOptions& opts);
+
     //==========================================================================================================
     // SetBearerAuth
     // Purpose: Configure optional server-side Bearer authentication for HTTP requests.

@@ -46,6 +46,8 @@ public:
 struct RequireBearerTokenOptions {
     std::string resourceMetadataUrl;
     std::vector<std::string> requiredScopes;
+    std::vector<std::string> authorizationServers;
+    std::vector<std::string> scopesSupported;
 };
 
 //==========================================================================================================

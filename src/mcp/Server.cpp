@@ -12,6 +12,7 @@
 #include <future>
 #include <memory>
 #include <limits>
+#include <stdexcept>
 #include <stop_token>
 #include <thread>
 #include <condition_variable>
@@ -41,6 +42,7 @@ private:
     mcp::async::Task<JSONValue> coCallTool(const std::string& name, const JSONValue& arguments);
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri);
     mcp::async::Task<JSONValue> coGetPrompt(const std::string& name, const JSONValue& arguments);
+    mcp::async::Task<RootsListResult> coRequestRootsList();
     mcp::async::Task<JSONValue> coRequestCreateMessage(const CreateMessageParams& params);
     mcp::async::Task<JSONValue> coRequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId);
     mcp::async::Task<void> coSendNotification(const std::string& method, const JSONValue& params);
@@ -784,6 +786,9 @@ private:
         } else if (notification->method == Methods::PromptListChanged) {
             // Handle prompts list change
             LOG_DEBUG("Prompts list changed");
+        } else if (notification->method == Methods::RootListChanged) {
+            // Handle roots list change
+            LOG_DEBUG("Roots list changed");
         } else {
             LOG_WARN("Unknown notification method: {}", notification->method);
         }
@@ -846,6 +851,20 @@ private:
                 auto samplingIt = capsObj.find("sampling");
                 if (samplingIt != capsObj.end()) {
                     clientCapabilities.sampling = SamplingCapability{};
+                }
+
+                // Parse roots capability (client -> server)
+                auto rootsIt = capsObj.find("roots");
+                if (rootsIt != capsObj.end()) {
+                    RootsCapability rootsCap{};
+                    if (rootsIt->second && std::holds_alternative<JSONValue::Object>((*rootsIt->second).value)) {
+                        const auto& rootsObj = std::get<JSONValue::Object>((*rootsIt->second).value);
+                        auto lc = rootsObj.find("listChanged");
+                        if (lc != rootsObj.end() && lc->second && std::holds_alternative<bool>(lc->second->value)) {
+                            rootsCap.listChanged = std::get<bool>(lc->second->value);
+                        }
+                    }
+                    clientCapabilities.roots = rootsCap;
                 }
                 // Parse extensions (optional per SEP-1724), store verbatim as JSONValue by key
                 auto extIt = capsObj.find("extensions");
@@ -1498,6 +1517,73 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::handleSetLogLevel(const JSONRPCRe
     return resp;
 }
 
+mcp::async::Task<RootsListResult> Server::Impl::coRequestRootsList() {
+    FUNC_SCOPE();
+    RootsListResult out;
+    if (!this->transport) {
+        LOG_ERROR("RequestRootsList called without transport");
+        co_return out;
+    }
+    if (!this->clientCapabilities.roots.has_value()) {
+        LOG_ERROR("RequestRootsList called but client did not advertise roots capability");
+        co_return out;
+    }
+
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::ListRoots;
+    auto fut = this->transport->SendRequest(std::move(request));
+    try {
+        auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (!response || response->IsError() || !response->result.has_value()) {
+            co_return out;
+        }
+
+        if (this->validationMode == validation::ValidationMode::Strict) {
+            if (!validation::validateRootsListResultJson(response->result.value())) {
+                throw std::runtime_error("Validation failed: roots/list result shape");
+            }
+        }
+
+        const auto& result = response->result.value();
+        if (!std::holds_alternative<JSONValue::Object>(result.value)) {
+            co_return out;
+        }
+        const auto& obj = std::get<JSONValue::Object>(result.value);
+        auto rootsIt = obj.find("roots");
+        if (rootsIt == obj.end() || !rootsIt->second || !std::holds_alternative<JSONValue::Array>(rootsIt->second->value)) {
+            co_return out;
+        }
+        const auto& rootsArray = std::get<JSONValue::Array>(rootsIt->second->value);
+        for (const auto& rootJson : rootsArray) {
+            if (!rootJson || !std::holds_alternative<JSONValue::Object>(rootJson->value)) {
+                continue;
+            }
+            const auto& rootObj = std::get<JSONValue::Object>(rootJson->value);
+            Root root;
+            auto uriIt = rootObj.find("uri");
+            if (uriIt != rootObj.end() && uriIt->second && std::holds_alternative<std::string>(uriIt->second->value)) {
+                root.uri = std::get<std::string>(uriIt->second->value);
+            }
+            auto nameIt = rootObj.find("name");
+            if (nameIt != rootObj.end() && nameIt->second && std::holds_alternative<std::string>(nameIt->second->value)) {
+                root.name = std::get<std::string>(nameIt->second->value);
+            }
+            auto metaIt = rootObj.find("_meta");
+            if (metaIt != rootObj.end() && metaIt->second) {
+                root.meta = *(metaIt->second);
+            }
+            if (root.uri.empty()) {
+                continue;
+            }
+            out.roots.push_back(std::move(root));
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("RequestRootsList exception: {}", e.what());
+        throw;
+    }
+    co_return out;
+}
+
 mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessage(const CreateMessageParams& params) {
     FUNC_SCOPE();
     if (!this->transport) {
@@ -2034,6 +2120,11 @@ void Server::SetLoggingRateLimitPerSecond(const std::optional<unsigned int>& per
 std::future<JSONValue> Server::RequestCreateMessage(const CreateMessageParams& params) {
     FUNC_SCOPE();
     return pImpl->coRequestCreateMessage(params).toFuture();
+}
+
+std::future<RootsListResult> Server::RequestRootsList() {
+    FUNC_SCOPE();
+    return pImpl->coRequestRootsList().toFuture();
 }
 
 std::future<JSONValue> Server::RequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId) {

@@ -37,6 +37,7 @@ private:
     std::unordered_map<std::string, IClient::NotificationHandler> notificationHandlers;
     IClient::ProgressHandler progressHandler;
     IClient::ErrorHandler errorHandler;
+    IClient::RootsListHandler rootsListHandler;
     IClient::SamplingHandler samplingHandler;
     IClient::SamplingHandlerCancelable samplingHandlerCancelable;
     validation::ValidationMode validationMode{validation::ValidationMode::Off};
@@ -173,6 +174,12 @@ private:
         if (caps.sampling.has_value()) {
             obj["sampling"] = std::make_shared<JSONValue>(JSONValue::Object{});
         }
+
+        if (caps.roots.has_value()) {
+            JSONValue::Object rootsObj;
+            rootsObj["listChanged"] = std::make_shared<JSONValue>(caps.roots->listChanged);
+            obj["roots"] = std::make_shared<JSONValue>(rootsObj);
+        }
         
         return JSONValue{obj};
     }
@@ -247,9 +254,10 @@ private:
                                                            const std::optional<int>& limit);
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri);
     mcp::async::Task<JSONValue> coReadResource(const std::string& uri,
-                                               const std::optional<int64_t>& offset,
-                                               const std::optional<int64_t>& length);
+                                                const std::optional<int64_t>& offset,
+                                                const std::optional<int64_t>& length);
     mcp::async::Task<JSONValue> coGetPrompt(const std::string& name, const JSONValue& arguments);
+    mcp::async::Task<void> coNotifyRootsListChanged();
 
     // Helpers to keep functions short and readable
     void onNotification(std::unique_ptr<JSONRPCNotification> n);
@@ -366,7 +374,42 @@ void Client::Impl::logInvalidCreateMessageResultContext(const JSONValue& result)
 
 std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& req) {
     try {
-        if (req.method == Methods::CreateMessage) {
+        if (req.method == Methods::ListRoots) {
+            if (!this->rootsListHandler) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No roots/list handler registered";
+                return errors::makeErrorResponse(req.id, e);
+            }
+
+            RootsListResult rootsResult = this->rootsListHandler().get();
+            JSONValue::Object resultObj;
+            JSONValue::Array rootsArray;
+            rootsArray.reserve(rootsResult.roots.size());
+            for (const auto& root : rootsResult.roots) {
+                JSONValue::Object rootObj;
+                rootObj["uri"] = std::make_shared<JSONValue>(root.uri);
+                if (root.name.has_value()) {
+                    rootObj["name"] = std::make_shared<JSONValue>(root.name.value());
+                }
+                if (root.meta.has_value()) {
+                    rootObj["_meta"] = std::make_shared<JSONValue>(root.meta.value());
+                }
+                rootsArray.push_back(std::make_shared<JSONValue>(rootObj));
+            }
+            resultObj["roots"] = std::make_shared<JSONValue>(rootsArray);
+
+            JSONValue result{resultObj};
+            if (this->validationMode == validation::ValidationMode::Strict) {
+                if (!validation::validateRootsListResultJson(result)) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid roots/list result shape";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+            }
+
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = result;
+            return resp;
+        } else if (req.method == Methods::CreateMessage) {
             // Register cancellation and stop_source for this request id
             const std::string idStr = Impl::idToString(req.id);
             auto token = this->registerCancelToken(idStr);
@@ -552,6 +595,24 @@ mcp::async::Task<void> Client::Impl::coUnsubscribeResources(const std::optional<
     request->params = JSONValue{params};
     auto fut = this->transport->SendRequest(std::move(request));
     try { (void) co_await mcp::async::makeFutureAwaitable(std::move(fut)); } catch (const std::exception& e) { LOG_ERROR("UnsubscribeResources exception: {}", e.what()); }
+    co_return;
+}
+
+mcp::async::Task<void> Client::Impl::coNotifyRootsListChanged() {
+    FUNC_SCOPE();
+    if (!this->transport) {
+        LOG_ERROR("NotifyRootsListChanged called without transport");
+        co_return;
+    }
+
+    auto notification = std::make_unique<JSONRPCNotification>();
+    notification->method = Methods::RootListChanged;
+    notification->params = JSONValue{JSONValue::Object{}};
+    try {
+        (void) co_await mcp::async::makeFutureAwaitable(this->transport->SendNotification(std::move(notification)));
+    } catch (const std::exception& e) {
+        LOG_ERROR("NotifyRootsListChanged exception: {}", e.what());
+    }
     co_return;
 }
 
@@ -1432,6 +1493,16 @@ void Client::RemoveNotificationHandler(const std::string& method) {
 void Client::SetProgressHandler(ProgressHandler handler) {
     FUNC_SCOPE();
     pImpl->progressHandler = std::move(handler);
+}
+
+void Client::SetRootsListHandler(RootsListHandler handler) {
+    FUNC_SCOPE();
+    pImpl->rootsListHandler = std::move(handler);
+}
+
+std::future<void> Client::NotifyRootsListChanged() {
+    FUNC_SCOPE();
+    return pImpl->coNotifyRootsListChanged().toFuture();
 }
 
 void Client::SetSamplingHandler(SamplingHandler handler) {

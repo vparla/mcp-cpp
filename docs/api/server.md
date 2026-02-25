@@ -132,6 +132,13 @@ Notes:
 - Client parsing: handled in [src/mcp/Client.cpp](../../src/mcp/Client.cpp) `parseServerCapabilities()`.
 - Tests: [tests/test_capabilities_logging.cpp](../../tests/test_capabilities_logging.cpp).
 
+## Roots (client capability)
+
+- std::future<RootsListResult> RequestRootsList()
+  - Sends `roots/list` to the connected client and returns the parsed result.
+  - This request is intended for clients that advertise `capabilities.roots` during initialize.
+  - In Strict validation mode, the server validates the `roots/list` response shape before returning.
+
 ## Server-side Bearer authentication (HTTP acceptor)
 
 See also: [Authentication](./auth.md) for consolidated flows, demos, and client-side OAuth 2.1.

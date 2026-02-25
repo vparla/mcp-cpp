@@ -236,6 +236,28 @@ inline bool validatePromptsListResultJson(const JSONValue& v) {
     return true;
 }
 
+inline bool validateRootsListResultJson(const JSONValue& v) {
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& o = std::get<JSONValue::Object>(v.value);
+    auto it = o.find("roots");
+    if (it == o.end() || !it->second || !std::holds_alternative<JSONValue::Array>(it->second->value)) {
+        return false;
+    }
+    const auto& a = std::get<JSONValue::Array>(it->second->value);
+    for (const auto& e : a) {
+        if (!e || !std::holds_alternative<JSONValue::Object>(e->value)) {
+            return false;
+        }
+        const auto& ro = std::get<JSONValue::Object>(e->value);
+        auto u = ro.find("uri"); if (u == ro.end() || !u->second || !std::holds_alternative<std::string>(u->second->value)) { return false; }
+        auto n = ro.find("name"); if (n != ro.end() && (!n->second || !std::holds_alternative<std::string>(n->second->value))) { return false; }
+        auto m = ro.find("_meta"); if (m != ro.end() && !m->second) { return false; }
+    }
+    return true;
+}
+
 //------------------------------ Sampling (server-initiated) ----------------------------------------------
 inline bool validateCreateMessageParamsJson(const JSONValue& v) {
     if (!std::holds_alternative<JSONValue::Object>(v.value)) return false;

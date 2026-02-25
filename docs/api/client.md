@@ -65,8 +65,15 @@ This page summarizes the public client APIs with signatures and brief descriptio
 ## Prompts
 - std::future<std::vector<Prompt>> ListPrompts()
 - std::future<PromptsListResult> ListPromptsPaged(const std::optional<std::string>& cursor,
-                                                 const std::optional<int>& limit)
+                                                  const std::optional<int>& limit)
 - std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments)
+
+## Roots (server → client)
+- using RootsListHandler = std::function<std::future<RootsListResult>()>;
+- void SetRootsListHandler(RootsListHandler handler)
+  - Register a handler for server-initiated `roots/list`.
+- std::future<void> NotifyRootsListChanged()
+  - Send `notifications/roots/list_changed` to the server.
 
 ## Sampling (server → client)
 - using SamplingHandler = std::function<std::future<JSONValue>(

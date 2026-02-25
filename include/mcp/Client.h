@@ -27,6 +27,7 @@ struct ClientCapabilities;
 struct Tool;
 struct Resource;
 struct ResourceTemplate;
+struct Root;
 struct Prompt;
 
 //==========================================================================================================
@@ -233,7 +234,27 @@ public:
     //   A future with the raw JSON result, including description and messages per MCP spec.
     //==========================================================================================================
     virtual std::future<JSONValue> GetPrompt(const std::string& name,
-                                            const JSONValue& arguments) = 0;
+                                             const JSONValue& arguments) = 0;
+
+    /////////////////////////////////////////// Roots operations ////////////////////////////////////////////////
+    //==========================================================================================================
+    // Registers a handler for server-initiated roots/list requests.
+    // Args:
+    //   handler: Callback returning current root list metadata.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    using RootsListHandler = std::function<std::future<RootsListResult>()>;
+    virtual void SetRootsListHandler(RootsListHandler handler) = 0;
+
+    //==========================================================================================================
+    // Notifies the server that the client roots list changed.
+    // Args:
+    //   (none)
+    // Returns:
+    //   A future that completes when the notification is sent.
+    //==========================================================================================================
+    virtual std::future<void> NotifyRootsListChanged() = 0;
 
     //////////////////////////// Server-initiated sampling handler registration ////////////////////////////////
     //==========================================================================================================
@@ -375,9 +396,12 @@ public:
 
     std::future<std::vector<Prompt>> ListPrompts() override;
     std::future<PromptsListResult> ListPromptsPaged(const std::optional<std::string>& cursor,
-                                                   const std::optional<int>& limit) override;
+                                                    const std::optional<int>& limit) override;
     std::future<JSONValue> GetPrompt(const std::string& name,
-                                    const JSONValue& arguments) override;
+                                     const JSONValue& arguments) override;
+
+    void SetRootsListHandler(RootsListHandler handler) override;
+    std::future<void> NotifyRootsListChanged() override;
 
     void SetSamplingHandler(SamplingHandler handler) override;
     void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) override;

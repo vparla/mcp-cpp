@@ -22,6 +22,7 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 add_executable(mcp_tests
+  test_architecture_enforcement.cpp
   test_resource_templates.cpp
   test_prompts_get.cpp
   test_tools_inputschema.cpp
@@ -33,6 +34,7 @@ add_executable(mcp_tests
   test_keepalive_threshold_config.cpp
   test_negative_api.cpp
   test_client_paging.cpp
+  test_roots.cpp
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp
   test_resource_read_chunking_overload.cpp
@@ -68,6 +70,7 @@ add_executable(mcp_tests
   test_shared_memory_transport.cpp
   test_http_auth.cpp
   test_http_server_bearer.cpp
+  test_http_server_metadata.cpp
   test_message_router.cpp
   test_content_framer.cpp
   test_stdio_drainframes.cpp
@@ -75,6 +78,7 @@ add_executable(mcp_tests
   test_stdio_writer.cpp
   test_http_transport_errors.cpp
   test_www_authenticate.cpp
+  test_oauth_discovery.cpp
   )
 
 target_link_libraries(mcp_tests
@@ -86,6 +90,7 @@ target_link_libraries(mcp_tests
 target_compile_features(mcp_tests PRIVATE cxx_std_20)
 
 target_include_directories(mcp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(mcp_tests PRIVATE MCP_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 
 include(GoogleTest)
 gtest_discover_tests(mcp_tests)
