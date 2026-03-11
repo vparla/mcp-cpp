@@ -2,7 +2,7 @@
 #==========================================================================================================
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Vinny Parla
-# File: test_stdio_hardening.sh
+# File: scripts/test_stdio_hardening.sh
 # Purpose: Integration tests for stdio transport hardening (idle read timeout, write queue overflow, write timeout)
 #==========================================================================================================
 set -euo pipefail
@@ -14,17 +14,18 @@ if [[ -z "$SCENARIO" ]]; then
 fi
 
 SERVER_BIN="${SERVER_BIN:-/src/build/examples/mcp_server/mcp_server}"
-C2S="/tmp/mcp_hardening_c2s.fifo" # client->server (server stdin)
-S2C="/tmp/mcp_hardening_s2c.fifo" # server->client (server stdout)
+FIFO_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mcp_hardening.XXXXXX")"
+C2S="${FIFO_DIR}/c2s.fifo" # client->server (server stdin)
+S2C="${FIFO_DIR}/s2c.fifo" # server->client (server stdout)
 
 cleanup() {
   set +e
   if [[ -n "${SERVER_PID:-}" ]]; then kill "${SERVER_PID}" 2>/dev/null || true; fi
   rm -f "$C2S" "$S2C" 2>/dev/null || true
+  if [[ -n "${FIFO_DIR:-}" ]]; then rmdir "$FIFO_DIR" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
 
-rm -f "$C2S" "$S2C" 2>/dev/null || true
 mkfifo "$C2S" "$S2C"
 
 # Pre-open both FIFOs RDWR so open() doesn't block, and to keep them open without an active peer.

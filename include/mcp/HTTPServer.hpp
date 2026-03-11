@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: HTTPServer.hpp
+// File: include/mcp/HTTPServer.hpp
 // Purpose: Coroutine-based HTTP/HTTPS JSON-RPC server using Boost.Beast (TLS 1.3 only for HTTPS)
 //==========================================================================================================
 
@@ -17,8 +17,8 @@
 
 namespace mcp {
 
-  // Note: HTTPServer implements the server-side acceptor role (ITransportAcceptor)
-  class HTTPServer : public ITransportAcceptor {
+  // Note: HTTPServer implements both the server-side acceptor role and the single-session ITransport role.
+  class HTTPServer : public ITransportAcceptor, public ITransport {
   public:
     //==========================================================================================================
     // Options
@@ -26,14 +26,18 @@ namespace mcp {
     // Fields:
     //   address: Bind address (default: 0.0.0.0)
     //   port: Listen port (default: 9443)
-    //   rpcPath: JSON-RPC request path
-    //   notifyPath: JSON-RPC notification path
+    //   endpointPath: Streamable HTTP endpoint path (single POST + GET SSE endpoint). Empty keeps legacy mode.
+    //   streamPath: Optional override for GET SSE. Defaults to endpointPath when empty.
+    //   rpcPath: Legacy JSON-RPC request path
+    //   notifyPath: Legacy JSON-RPC notification path
     //   scheme: "http" or "https" (TLS 1.3 only for https)
     //   certFile/keyFile: PEM files required when scheme == https
     //==========================================================================================================
     struct Options {
         std::string address{"0.0.0.0"};
         std::string port{"9443"};
+        std::string endpointPath;
+        std::string streamPath;
         std::string rpcPath{"/mcp/rpc"};
         std::string notifyPath{"/mcp/notify"};
         std::string scheme{"https"}; // "http" or "https"
@@ -57,6 +61,13 @@ namespace mcp {
     //   Future that completes when shutdown has finished.
     //==========================================================================================================
     std::future<void> Stop() override;
+
+    ////////////////////////////////////////// ITransport //////////////////////////////////////////
+    std::future<void> Close() override;
+    bool IsConnected() const override;
+    std::string GetSessionId() const override;
+    std::future<std::unique_ptr<JSONRPCResponse>> SendRequest(std::unique_ptr<JSONRPCRequest> request) override;
+    std::future<void> SendNotification(std::unique_ptr<JSONRPCNotification> notification) override;
 
     //==========================================================================================================
     // Sets the request handler (JSON-RPC request -> response).
@@ -109,6 +120,7 @@ private:
   //          string. The configuration format is uri format, intentionally simple and stable:
   //            - "http://<address>:<port>" (e.g., http://127.0.0.1:0)
   //            - "https://<address>:<port>?cert=<pem>&key=<pem>"
+  //            - optional query params: endpointPath, streamPath, rpcPath, notifyPath
   //          Unknown parameters are ignored. If scheme is omitted, defaults to http.
   //==========================================================================================================
   class HTTPServerFactory : public ITransportAcceptorFactory {

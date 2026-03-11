@@ -29,6 +29,12 @@ This matrix tracks the MCP C++ SDK feature coverage relative to the MCP spec.
   - Get prompt: Implemented (returns `PromptResult.messages`)
   - List-changed notifications: Implemented
 
+- Utilities
+  - `ping`: Implemented
+  - `completion/complete`: Implemented
+  - `roots/list` and `notifications/roots/list_changed`: Implemented
+  - `elicitation/create`: Implemented
+
 - Sampling
   - Client-registered sampling handler: Implemented (client API)
   - Server-initiated `sampling/createMessage`: Implemented (`tests/test_server_initiated_sampling.cpp`)
@@ -56,6 +62,7 @@ This matrix tracks the MCP C++ SDK feature coverage relative to the MCP spec.
 - Transports
   - InMemory: Implemented (unit-test transport)
   - Stdio: Implemented (demo integration test in CTest)
+  - HTTP streamable transport/session lifecycle: Implemented (`tests/test_http_streamable.cpp`)
   - Stdio hardening negative tests: Implemented (idle read timeout, write queue overflow, write timeout, bad Content-Length)
 
 - CI
@@ -69,10 +76,10 @@ Notes:
 
 ---
 
-## Detailed Parity by Spec Area (MCP 2025-06-18)
+## Detailed Parity by Spec Area (MCP 2025-11-25)
 
 - **[Protocol Version]**
-  - Version constant: `PROTOCOL_VERSION = "2025-06-18"`.
+  - Version constant: `PROTOCOL_VERSION = "2025-11-25"`.
   - Source: [include/mcp/Protocol.h](../include/mcp/Protocol.h)
 
 - **[Initialize Handshake & Post-Init Notifications]**
@@ -81,9 +88,10 @@ Notes:
   - Tests: [tests/test_initialize_notifications.cpp](../tests/test_initialize_notifications.cpp)
 
 - **[Capabilities Advertisement]**
-  - `ServerCapabilities` includes `tools`, `resources`, `prompts`, `sampling`, `logging`, and `experimental` map.
+  - `ServerCapabilities` includes `tools`, `resources`, `prompts`, `sampling`, `completions`, `logging`, and `experimental` map.
+  - `ClientCapabilities` includes `roots`, `sampling`, `elicitation`, `experimental`, and `extensions`.
   - Source: [include/mcp/Protocol.h](../include/mcp/Protocol.h)
-  - Logging capability explicitly advertised; parsed by client.
+  - Logging and completion capabilities are explicitly advertised; roots and elicitation are negotiated from the client.
   - Tests: [tests/test_capabilities_logging.cpp](../tests/test_capabilities_logging.cpp)
 
 - **[Tools]**
@@ -105,6 +113,14 @@ Notes:
   - List (paged), Get prompt returns `messages` with correct shape.
   - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h)
   - Tests: [tests/test_prompts_get.cpp](../tests/test_prompts_get.cpp), [tests/test_client_paging.cpp](../tests/test_client_paging.cpp)
+
+- **[Utilities: Ping, Completion, Roots, Elicitation]**
+  - `ping`: Implemented for client->server and server->client flows.
+  - `completion/complete`: Implemented with strict validation and typed result parsing.
+  - `roots/list` + `notifications/roots/list_changed`: Implemented.
+  - `elicitation/create`: Implemented with strict validation and typed request/result parsing.
+  - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h), [src/mcp/Client.cpp](../src/mcp/Client.cpp), [src/mcp/Server.cpp](../src/mcp/Server.cpp)
+  - Tests: [tests/test_completion_ping.cpp](../tests/test_completion_ping.cpp), [tests/test_roots.cpp](../tests/test_roots.cpp), [tests/test_elicitation.cpp](../tests/test_elicitation.cpp)
 
 - **[Sampling (Server → Client)]**
   - Server-initiated `sampling/createMessage` with optional cancelable handler on client.
@@ -146,6 +162,8 @@ Notes:
 - **[Validation (Opt‑In)]**
   - Toggle Off/Strict for runtime shape checks; docs describe API.
   - Sources: [docs/api/validation.md](./api/validation.md)
+  - Strict validators accept richer non-text content blocks, structured tool outputs, and richer prompt/resource payloads.
+  - Tests: [tests/test_content_parity.cpp](../tests/test_content_parity.cpp), [tests/test_validation_strict.cpp](../tests/test_validation_strict.cpp)
 
 - **[Transports]**
   - InMemory: Implemented — [include/mcp/InMemoryTransport.hpp](../include/mcp/InMemoryTransport.hpp)
@@ -153,7 +171,9 @@ Notes:
   - Shared Memory: Implemented — [include/mcp/SharedMemoryTransport.hpp](../include/mcp/SharedMemoryTransport.hpp)
   - HTTP client: Implemented — [include/mcp/HTTPTransport.hpp](../include/mcp/HTTPTransport.hpp)
   - HTTP server acceptor: Implemented — [include/mcp/HTTPServer.hpp](../include/mcp/HTTPServer.hpp)
+  - Streamable HTTP (`POST` endpoint + `GET` SSE stream + session lifecycle): Implemented.
   - Integration demo test: `TransportDemo.Run` — defined in [tests/CMakeLists.txt](../tests/CMakeLists.txt)
+  - Streamable HTTP tests: [tests/test_http_streamable.cpp](../tests/test_http_streamable.cpp)
 
 - **[OAuth]**
   - Status: Implemented

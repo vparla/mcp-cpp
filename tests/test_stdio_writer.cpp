@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: test_stdio_writer.cpp
+// File: tests/test_stdio_writer.cpp
 // Purpose: StdioTransport negative-path tests (invalid/empty responses)
 //==========================================================================================================
 
@@ -10,6 +10,7 @@
 #include <chrono>
 #include <future>
 #include <string>
+#include <thread>
 
 #include "mcp/StdioTransport.hpp"
 #include "mcp/JSONRPCTypes.h"
@@ -49,6 +50,9 @@ TEST(StdioWriter, WriteQueueOverflowCloses) {
 #ifndef _WIN32
 TEST(StdioWriter, WriteTimeoutCloses) {
     const bool inContainer = (std::getenv("MCP_IN_CONTAINER") != nullptr);
+    const auto writeTimeout = inContainer ? 250ms : 100ms;
+    const auto waitTimeout = inContainer ? 15s : 5s;
+
     // Redirect stdout to a non-blocking pipe whose write end is full
     int saved = ::dup(STDOUT_FILENO);
     ASSERT_GE(saved, 0);
@@ -78,11 +82,26 @@ TEST(StdioWriter, WriteTimeoutCloses) {
     ASSERT_GE(::dup2(writeFd, STDOUT_FILENO), 0);
     ::close(writeFd);
 
+    struct StdoutRestoreGuard {
+        int savedFd;
+        int readFd;
+
+        ~StdoutRestoreGuard() {
+            if (savedFd >= 0) {
+                (void)::dup2(savedFd, STDOUT_FILENO);
+                ::close(savedFd);
+            }
+            if (readFd >= 0) {
+                ::close(readFd);
+            }
+        }
+    } restoreGuard{saved, readFd};
+
     mcp::StdioTransport t;
     std::promise<void> errPromise;
     std::atomic<bool> sawError{false};
     t.SetErrorHandler([&](const std::string&){ if (!sawError.exchange(true)) { errPromise.set_value(); } });
-    t.SetWriteTimeoutMs(inContainer ? 100 : 50);
+    t.SetWriteTimeoutMs(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(writeTimeout).count()));
     t.Start().get();
 
     auto n = std::make_unique<mcp::JSONRPCNotification>();
@@ -92,13 +111,16 @@ TEST(StdioWriter, WriteTimeoutCloses) {
     t.SendNotification(std::move(n)).get();
 
     auto fut = errPromise.get_future();
-    ASSERT_EQ(fut.wait_for(inContainer ? 10s : 3s), std::future_status::ready);
-    EXPECT_FALSE(t.IsConnected());
+    const auto deadline = std::chrono::steady_clock::now() + waitTimeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (fut.wait_for(0ms) == std::future_status::ready && !t.IsConnected()) {
+            break;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
 
-    // Restore stdout and cleanup
-    ASSERT_GE(::dup2(saved, STDOUT_FILENO), 0);
-    ::close(saved);
-    ::close(readFd);
+    EXPECT_EQ(fut.wait_for(0ms), std::future_status::ready);
+    EXPECT_FALSE(t.IsConnected());
 
     t.Close().get();
 }

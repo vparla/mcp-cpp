@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: Protocol.h
+// File: include/mcp/Protocol.h
 // Purpose: MCP protocol data structures and constants
 //==========================================================================================================
 
@@ -64,6 +64,14 @@ struct SamplingCapability {
     // Empty for now - may be extended in future
 };
 
+struct CompletionsCapability {
+    // Empty for now - presence indicates completion/complete is supported
+};
+
+struct ElicitationCapability {
+    std::vector<std::string> modes;
+};
+
 struct LoggingCapability {
     // Empty for now - presence indicates logging notifications are supported
 };
@@ -73,6 +81,7 @@ struct ServerCapabilities {
     std::optional<ResourcesCapability> resources;
     std::optional<PromptsCapability> prompts;
     std::optional<SamplingCapability> sampling;
+    std::optional<CompletionsCapability> completions;
     std::optional<LoggingCapability> logging;
     std::unordered_map<std::string, JSONValue> experimental;
 };
@@ -80,6 +89,7 @@ struct ServerCapabilities {
 struct ClientCapabilities {
     std::optional<RootsCapability> roots;
     std::optional<SamplingCapability> sampling;
+    std::optional<ElicitationCapability> elicitation;
     std::unordered_map<std::string, JSONValue> experimental;
     // Optional negotiated extensions per SEP-1724 (e.g., io.modelcontextprotocol/ui)
     std::unordered_map<std::string, JSONValue> extensions;
@@ -91,13 +101,21 @@ struct Tool {
     std::string name;
     std::string description;
     JSONValue inputSchema;  // JSON Schema for tool parameters
+    std::optional<JSONValue> outputSchema;
+    std::optional<JSONValue> annotations;
+    std::optional<JSONValue> execution;
     std::optional<JSONValue> meta; // serialized as _meta in tools/list
     
     Tool() = default;
     Tool(std::string name, std::string description, JSONValue inputSchema = JSONValue{},
-         std::optional<JSONValue> metaValue = std::nullopt)
+         std::optional<JSONValue> metaValue = std::nullopt,
+         std::optional<JSONValue> outputSchemaValue = std::nullopt,
+         std::optional<JSONValue> annotationsValue = std::nullopt,
+         std::optional<JSONValue> executionValue = std::nullopt)
         : name(std::move(name)), description(std::move(description)),
-          inputSchema(std::move(inputSchema)), meta(std::move(metaValue)) {}
+          inputSchema(std::move(inputSchema)), outputSchema(std::move(outputSchemaValue)),
+          annotations(std::move(annotationsValue)), execution(std::move(executionValue)),
+          meta(std::move(metaValue)) {}
 };
 
 struct CallToolParams {
@@ -107,7 +125,27 @@ struct CallToolParams {
 
 struct CallToolResult {
     std::vector<JSONValue> content;  // Array of content items
+    std::optional<JSONValue> structuredContent;
+    std::optional<JSONValue> meta;   // serialized as _meta in tools/call
     bool isError = false;
+};
+
+///////////////////////////////////////// Completion ///////////////////////////////////////////
+struct CompleteArgument {
+    std::string name;
+    std::string value;
+};
+
+struct CompleteParams {
+    JSONValue ref;
+    CompleteArgument argument;
+    std::optional<JSONValue> context;
+};
+
+struct CompletionResult {
+    std::vector<std::string> values;
+    std::optional<int64_t> total;
+    bool hasMore = false;
 };
 
 ///////////////////////////////////////// Resources ///////////////////////////////////////////
@@ -235,6 +273,23 @@ struct CreateMessageResult {
     std::optional<JSONValue> stopReason;
 };
 
+///////////////////////////////////////// Elicitation ///////////////////////////////////////////
+struct ElicitationRequest {
+    std::string message;
+    JSONValue requestedSchema;
+    std::optional<std::string> title;
+    std::optional<std::string> mode;
+    std::optional<std::string> url;
+    std::optional<std::string> elicitationId;
+    std::optional<JSONValue> metadata;
+};
+
+struct ElicitationResult {
+    std::string action;
+    std::optional<JSONValue> content;
+    std::optional<std::string> elicitationId;
+};
+
 ///////////////////////////////////////// Progress ///////////////////////////////////////////
 // Progress structures
 struct ProgressParams {
@@ -265,9 +320,11 @@ struct RootListChangedParams {
 // MCP method names
 namespace Methods {
     // Client to server
+    constexpr const char* Ping = "ping";
     constexpr const char* Initialize = "initialize";
     constexpr const char* ListTools = "tools/list";
     constexpr const char* CallTool = "tools/call";
+    constexpr const char* Complete = "completion/complete";
     constexpr const char* ListResources = "resources/list";
     constexpr const char* ReadResource = "resources/read";
     constexpr const char* Subscribe = "resources/subscribe";
@@ -278,8 +335,9 @@ namespace Methods {
     constexpr const char* GetPrompt = "prompts/get";
     constexpr const char* ListRoots = "roots/list";
     
-    // Server to client (sampling)
+    // Server to client (sampling + elicitation)
     constexpr const char* CreateMessage = "sampling/createMessage";
+    constexpr const char* Elicit = "elicitation/create";
     
     // Notifications
     constexpr const char* Initialized = "notifications/initialized";
@@ -290,6 +348,7 @@ namespace Methods {
     constexpr const char* ToolListChanged = "notifications/tools/list_changed";
     constexpr const char* PromptListChanged = "notifications/prompts/list_changed";
     constexpr const char* RootListChanged = "notifications/roots/list_changed";
+    constexpr const char* ElicitationComplete = "notifications/elicitation/complete";
     constexpr const char* Cancelled = "notifications/cancelled";
 }
 

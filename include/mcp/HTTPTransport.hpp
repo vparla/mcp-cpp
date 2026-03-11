@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: HTTPTransport.hpp
+// File: include/mcp/HTTPTransport.hpp
 // Purpose: Coroutine-based HTTP/HTTPS JSON-RPC client transport using Boost.Beast (TLS 1.3 only for HTTPS)
 //==========================================================================================================
 
@@ -44,8 +44,10 @@ public:
     //   scheme: "http" or "https" (default: https)
     //   host: Server hostname or IP (default: localhost)
     //   port: Service port (default: 9443)
-    //   rpcPath: JSON-RPC request path
-    //   notifyPath: JSON-RPC notification path
+    //   endpointPath: Streamable HTTP endpoint path (single POST + GET SSE endpoint). Empty keeps legacy mode.
+    //   streamPath: Optional override for the GET SSE path. Defaults to endpointPath when empty.
+    //   rpcPath: Legacy JSON-RPC request path when endpointPath is empty.
+    //   notifyPath: Legacy JSON-RPC notification path when endpointPath is empty.
     //   serverName: TLS SNI and hostname verification name (when https)
     //   caFile/caPath: Optional CA bundle/path for trust store
     //   connectTimeoutMs: Connect timeout in milliseconds
@@ -55,6 +57,8 @@ public:
         std::string scheme{"https"};
         std::string host{"localhost"};
         std::string port{"9443"};
+        std::string endpointPath;
+        std::string streamPath;
         std::string rpcPath{"/mcp/rpc"};
         std::string notifyPath{"/mcp/notify"};
         std::string serverName;
@@ -62,6 +66,9 @@ public:
         std::string caPath;
         unsigned int connectTimeoutMs{10000};
         unsigned int readTimeoutMs{30000};
+        unsigned int sseReconnectDelayMs{250};
+        bool enableGetStream{true};
+        bool enableDeleteOnClose{true};
 
         //======================================================================================================
         // Authentication (optional)

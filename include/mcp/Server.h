@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: Server.h
+// File: include/mcp/Server.h
 // Purpose: MCP server interface - COM-style abstraction for MCP server operations
 //==========================================================================================================
 
@@ -35,6 +35,7 @@ using PromptResult = GetPromptResult;
 using ToolHandler = std::function<std::future<ToolResult>(const JSONValue&, std::stop_token)>;
 using ResourceHandler = std::function<std::future<ResourceContent>(const std::string&, std::stop_token)>;
 using PromptHandler = std::function<PromptResult(const JSONValue&)>;
+using CompletionHandler = std::function<std::future<CompletionResult>(const CompleteParams&)>;
 
 struct ServerCapabilities;
 struct ClientCapabilities;
@@ -260,6 +261,16 @@ public:
     //==========================================================================================================
     virtual std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments) = 0;
 
+    ////////////////////////////////////////// Completion ////////////////////////////////////////////
+    //==========================================================================================================
+    // Registers a completion handler to service completion/complete requests.
+    // Args:
+    //   handler: Async callback receiving completion reference + argument context.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void SetCompletionHandler(CompletionHandler handler) = 0;
+
     //////////////////////////////// Sampling handler (for LLM integration) ////////////////////////////////////
     //==========================================================================================================
     // Registers a server-side sampling handler to respond to client-initiated sampling requests.
@@ -357,6 +368,24 @@ public:
     //==========================================================================================================
     virtual std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params,
                                                              const std::string& requestId) = 0;
+
+    ///////////////////////////////////////////// Elicitation /////////////////////////////////////////////////
+    //==========================================================================================================
+    // Requests structured input from the connected client via elicitation/create.
+    // Args:
+    //   request: Elicitation prompt metadata and requested schema.
+    // Returns:
+    //   Future with client action/content result.
+    //==========================================================================================================
+    virtual std::future<ElicitationResult> RequestElicitation(const ElicitationRequest& request) = 0;
+
+    /////////////////////////////////////////////// Ping //////////////////////////////////////////////////////
+    //==========================================================================================================
+    // Pings the connected client using the MCP ping utility method.
+    // Returns:
+    //   Future that completes once a successful ping response is received.
+    //==========================================================================================================
+    virtual std::future<void> Ping() = 0;
 
     /////////////////////////////////////////// Notification sending ///////////////////////////////////////////
     //==========================================================================================================
@@ -527,6 +556,7 @@ public:
 
     // Sampling handler
     void SetSamplingHandler(SamplingHandler handler) override;
+    void SetCompletionHandler(CompletionHandler handler) override;
 
     // Keepalive / Heartbeat
     void SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) override;
@@ -546,6 +576,8 @@ public:
     std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) override;
     std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params,
                                                      const std::string& requestId) override;
+    std::future<ElicitationResult> RequestElicitation(const ElicitationRequest& request) override;
+    std::future<void> Ping() override;
 
     // IServer message sending
     std::future<void> SendNotification(const std::string& method, const JSONValue& params) override;

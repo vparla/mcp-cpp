@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: Client.h
+// File: include/mcp/Client.h
 // Purpose: MCP client interface - COM-style abstraction for MCP client operations
 //==========================================================================================================
 
@@ -236,6 +236,24 @@ public:
     virtual std::future<JSONValue> GetPrompt(const std::string& name,
                                              const JSONValue& arguments) = 0;
 
+    ////////////////////////////////////////// Completion ///////////////////////////////////////////////
+    //==========================================================================================================
+    // Requests argument completions from the server.
+    // Args:
+    //   params: Completion reference and argument context.
+    // Returns:
+    //   Future with typed completion values/metadata.
+    //==========================================================================================================
+    virtual std::future<CompletionResult> Complete(const CompleteParams& params) = 0;
+
+    ////////////////////////////////////////////// Ping //////////////////////////////////////////////////////
+    //==========================================================================================================
+    // Pings the connected server using the MCP ping utility method.
+    // Returns:
+    //   Future that completes once a successful ping response is received.
+    //==========================================================================================================
+    virtual std::future<void> Ping() = 0;
+
     /////////////////////////////////////////// Roots operations ////////////////////////////////////////////////
     //==========================================================================================================
     // Registers a handler for server-initiated roots/list requests.
@@ -281,6 +299,17 @@ public:
         const JSONValue& includeContext,
         std::stop_token st)>;
     virtual void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) = 0;
+
+    ///////////////////////////////////////////// Elicitation /////////////////////////////////////////////////
+    //==========================================================================================================
+    // Registers a handler to service server-initiated elicitation/create requests.
+    // Args:
+    //   handler: Async callback returning accept/decline/cancel plus optional content.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    using ElicitationHandler = std::function<std::future<ElicitationResult>(const ElicitationRequest&)>;
+    virtual void SetElicitationHandler(ElicitationHandler handler) = 0;
 
     ////////////////////////////////////////// Notification handlers ///////////////////////////////////////////
     //==========================================================================================================
@@ -399,12 +428,15 @@ public:
                                                     const std::optional<int>& limit) override;
     std::future<JSONValue> GetPrompt(const std::string& name,
                                      const JSONValue& arguments) override;
+    std::future<CompletionResult> Complete(const CompleteParams& params) override;
+    std::future<void> Ping() override;
 
     void SetRootsListHandler(RootsListHandler handler) override;
     std::future<void> NotifyRootsListChanged() override;
 
     void SetSamplingHandler(SamplingHandler handler) override;
     void SetSamplingHandlerCancelable(SamplingHandlerCancelable handler) override;
+    void SetElicitationHandler(ElicitationHandler handler) override;
 
     void SetNotificationHandler(const std::string& method, NotificationHandler handler) override;
     void RemoveNotificationHandler(const std::string& method) override;

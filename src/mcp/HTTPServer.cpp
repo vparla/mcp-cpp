@@ -12,6 +12,12 @@
 #include <algorithm>
 #include <cctype>
 #include <future>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <random>
+#include <unordered_map>
+#include <vector>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -25,6 +31,7 @@
 #include "logging/Logger.h"
 #include "mcp/HTTPServer.hpp"
 #include "mcp/JSONRPCTypes.h"
+#include "mcp/Protocol.h"
 #include "mcp/auth/ServerAuth.hpp"
 #include "mcp/JsonRpcMessageRouter.h"
 
@@ -49,6 +56,24 @@ public:
     ITransport::RequestHandler requestHandler;
     ITransport::NotificationHandler notificationHandler;
     ITransport::ErrorHandler errorHandler;
+
+    struct SessionState {
+        std::string id;
+        std::string protocolVersion{PROTOCOL_VERSION};
+        std::mutex mutex;
+        std::condition_variable cv;
+        std::deque<std::pair<std::string, std::string>> outboundMessages;
+        std::unordered_map<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>> pendingRequests;
+        bool closed{false};
+        uint64_t nextEventId{1u};
+    };
+
+    std::mutex sessionsMutex;
+    std::unordered_map<std::string, std::shared_ptr<SessionState>> sessions;
+    std::string activeSessionId;
+    std::atomic<unsigned int> requestCounter{0u};
+    std::mutex sseThreadsMutex;
+    std::vector<std::thread> sseThreads;
 
     // Optional server-side Bearer authentication
     mcp::auth::ITokenVerifier* tokenVerifier{nullptr};
@@ -85,6 +110,12 @@ public:
             ioc.stop();
             ioThread.join();
         }
+        std::lock_guard<std::mutex> lk(sseThreadsMutex);
+        for (auto& thread : sseThreads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
     }
 
     void setError(const std::string& msg) {
@@ -100,6 +131,148 @@ public:
         }
     }
 
+    bool useStreamableHttp() const {
+        return !opts.endpointPath.empty();
+    }
+
+    std::string endpointPath() const {
+        return opts.endpointPath;
+    }
+
+    std::string streamPath() const {
+        if (!opts.streamPath.empty()) {
+            return opts.streamPath;
+        }
+        return opts.endpointPath;
+    }
+
+    std::string generateSessionId() {
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(1000, 9999);
+        return std::string("mcp-http-") + std::to_string(dis(gen));
+    }
+
+    std::string generateRequestId() {
+        return std::string("http-server-req-") + std::to_string(++requestCounter);
+    }
+
+    std::shared_ptr<SessionState> findSession(const std::string& id) {
+        std::lock_guard<std::mutex> lk(sessionsMutex);
+        auto it = sessions.find(id);
+        return it == sessions.end() ? nullptr : it->second;
+    }
+
+    std::shared_ptr<SessionState> createSession(const std::string& protocolVersion) {
+        auto session = std::make_shared<SessionState>();
+        session->id = generateSessionId();
+        session->protocolVersion = protocolVersion.empty() ? std::string(PROTOCOL_VERSION) : protocolVersion;
+        std::lock_guard<std::mutex> lk(sessionsMutex);
+        sessions[session->id] = session;
+        activeSessionId = session->id;
+        return session;
+    }
+
+    std::shared_ptr<SessionState> activeSession() {
+        std::lock_guard<std::mutex> lk(sessionsMutex);
+        auto it = sessions.find(activeSessionId);
+        return it == sessions.end() ? nullptr : it->second;
+    }
+
+    void removeSession(const std::string& id) {
+        std::shared_ptr<SessionState> removed;
+        std::vector<std::pair<std::string, std::promise<std::unique_ptr<JSONRPCResponse>>>> pending;
+        {
+            std::lock_guard<std::mutex> lk(sessionsMutex);
+            auto it = sessions.find(id);
+            if (it == sessions.end()) {
+                return;
+            }
+            removed = it->second;
+            sessions.erase(it);
+            if (activeSessionId == id) {
+                activeSessionId.clear();
+            }
+        }
+        if (removed) {
+            {
+                std::lock_guard<std::mutex> lk(removed->mutex);
+                removed->closed = true;
+                for (auto& entry : removed->pendingRequests) {
+                    pending.emplace_back(entry.first, std::move(entry.second));
+                }
+                removed->pendingRequests.clear();
+                removed->cv.notify_all();
+            }
+            for (auto& entry : pending) {
+                auto resp = std::make_unique<JSONRPCResponse>();
+                resp->id = entry.first;
+                resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "HTTP session closed", std::nullopt);
+                entry.second.set_value(std::move(resp));
+            }
+        }
+    }
+
+    void queueOutbound(const std::shared_ptr<SessionState>& session, const std::string& payload) {
+        if (!session) {
+            return;
+        }
+        std::lock_guard<std::mutex> lk(session->mutex);
+        session->outboundMessages.emplace_back(std::to_string(session->nextEventId++), payload);
+        session->cv.notify_all();
+    }
+
+    bool validateProtocolHeader(const http::request<http::string_body>& req,
+                                const std::shared_ptr<SessionState>& session,
+                                http::response<http::string_body>& res) {
+        const std::string versionHeader = std::string(req["MCP-Protocol-Version"]);
+        if (versionHeader.empty()) {
+            return true;
+        }
+        const std::string expected = session ? session->protocolVersion : std::string(PROTOCOL_VERSION);
+        if (versionHeader != expected) {
+            res.result(http::status::bad_request);
+            res.body() = std::string("{\"error\":\"Unsupported protocol version\"}");
+            res.prepare_payload();
+            return false;
+        }
+        return true;
+    }
+
+    bool resolvePendingResponse(const std::shared_ptr<SessionState>& session, JSONRPCResponse&& response) {
+        if (!session) {
+            return false;
+        }
+        std::string respKey;
+        std::visit([&](const auto& id) {
+            using T = std::decay_t<decltype(id)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                respKey = id;
+            } else if constexpr (std::is_same_v<T, int64_t>) {
+                respKey = std::to_string(id);
+            }
+        }, response.id);
+        if (respKey.empty()) {
+            return false;
+        }
+        std::promise<std::unique_ptr<JSONRPCResponse>> deliverPromise;
+        bool havePromise = false;
+        {
+            std::lock_guard<std::mutex> lk(session->mutex);
+            auto it = session->pendingRequests.find(respKey);
+            if (it != session->pendingRequests.end()) {
+                deliverPromise = std::move(it->second);
+                session->pendingRequests.erase(it);
+                havePromise = true;
+            }
+        }
+        if (havePromise) {
+            deliverPromise.set_value(std::make_unique<JSONRPCResponse>(std::move(response)));
+            return true;
+        }
+        return false;
+    }
+
     net::awaitable<void> session_plain(tcp::socket socket) {
         try {
             boost::beast::tcp_stream stream(std::move(socket));
@@ -107,6 +280,66 @@ public:
             for (;;) {
                 http::request<http::string_body> req;
                 co_await http::async_read(stream, buffer, req, net::use_awaitable);
+                if (useStreamableHttp() &&
+                    req.method() == http::verb::get &&
+                    std::string(req.target()) == streamPath()) {
+                    const std::string sessionHeader = std::string(req["Mcp-Session-Id"]);
+                    auto session = findSession(sessionHeader);
+                    http::response<http::string_body> res{http::status::bad_request, req.version()};
+                    res.set(http::field::content_type, "application/json");
+                    res.keep_alive(false);
+                    if (!session) {
+                        res.result(http::status::bad_request);
+                        res.body() = std::string("{\"error\":\"Missing or invalid session\"}");
+                        res.prepare_payload();
+                        co_await http::async_write(stream, res, net::use_awaitable);
+                        break;
+                    }
+                    if (!validateProtocolHeader(req, session, res)) {
+                        co_await http::async_write(stream, res, net::use_awaitable);
+                        break;
+                    }
+
+                    tcp::socket sseSocket(std::move(stream.socket()));
+                    std::lock_guard<std::mutex> lk(sseThreadsMutex);
+                    sseThreads.emplace_back([this, s = std::move(sseSocket), session]() mutable {
+                        try {
+                            const std::string header =
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-Type: text/event-stream\r\n"
+                                "Cache-Control: no-cache\r\n"
+                                "Connection: close\r\n"
+                                "Mcp-Session-Id: " + session->id + "\r\n\r\n";
+                            boost::asio::write(s, boost::asio::buffer(header));
+                            while (running.load()) {
+                                std::pair<std::string, std::string> next;
+                                {
+                                    std::unique_lock<std::mutex> sessionLock(session->mutex);
+                                    session->cv.wait_for(sessionLock, std::chrono::milliseconds(500), [&]() {
+                                        return session->closed || !session->outboundMessages.empty() || !running.load();
+                                    });
+                                    if (session->closed || !running.load()) {
+                                        break;
+                                    }
+                                    if (session->outboundMessages.empty()) {
+                                        continue;
+                                    }
+                                    next = std::move(session->outboundMessages.front());
+                                    session->outboundMessages.pop_front();
+                                }
+                                const std::string event = std::string("id: ") + next.first + std::string("\n") +
+                                                          std::string("data: ") + next.second + std::string("\n\n");
+                                boost::asio::write(s, boost::asio::buffer(event));
+                            }
+                        } catch (const std::exception& e) {
+                            setError(std::string("HTTPServer SSE plain session error: ") + e.what());
+                        }
+                        boost::system::error_code ec;
+                        s.shutdown(tcp::socket::shutdown_both, ec);
+                        s.close(ec);
+                    });
+                    co_return;
+                }
                 auto res = makeResponse(req);
                 co_await http::async_write(stream, res, net::use_awaitable);
                 break; // close after single request
@@ -143,6 +376,65 @@ public:
             for (;;) {
                 http::request<http::string_body> req;
                 co_await http::async_read(tls, buffer, req, net::use_awaitable);
+                if (useStreamableHttp() &&
+                    req.method() == http::verb::get &&
+                    std::string(req.target()) == streamPath()) {
+                    const std::string sessionHeader = std::string(req["Mcp-Session-Id"]);
+                    auto session = findSession(sessionHeader);
+                    http::response<http::string_body> res{http::status::bad_request, req.version()};
+                    res.set(http::field::content_type, "application/json");
+                    res.keep_alive(false);
+                    if (!session) {
+                        res.result(http::status::bad_request);
+                        res.body() = std::string("{\"error\":\"Missing or invalid session\"}");
+                        res.prepare_payload();
+                        co_await http::async_write(tls, res, net::use_awaitable);
+                        break;
+                    }
+                    if (!validateProtocolHeader(req, session, res)) {
+                        co_await http::async_write(tls, res, net::use_awaitable);
+                        break;
+                    }
+
+                    ssl::stream<tcp::socket> tlsStream(std::move(tls));
+                    std::lock_guard<std::mutex> lk(sseThreadsMutex);
+                    sseThreads.emplace_back([this, s = std::move(tlsStream), session]() mutable {
+                        try {
+                            const std::string header =
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-Type: text/event-stream\r\n"
+                                "Cache-Control: no-cache\r\n"
+                                "Connection: close\r\n"
+                                "Mcp-Session-Id: " + session->id + "\r\n\r\n";
+                            boost::asio::write(s, boost::asio::buffer(header));
+                            while (running.load()) {
+                                std::pair<std::string, std::string> next;
+                                {
+                                    std::unique_lock<std::mutex> sessionLock(session->mutex);
+                                    session->cv.wait_for(sessionLock, std::chrono::milliseconds(500), [&]() {
+                                        return session->closed || !session->outboundMessages.empty() || !running.load();
+                                    });
+                                    if (session->closed || !running.load()) {
+                                        break;
+                                    }
+                                    if (session->outboundMessages.empty()) {
+                                        continue;
+                                    }
+                                    next = std::move(session->outboundMessages.front());
+                                    session->outboundMessages.pop_front();
+                                }
+                                const std::string event = std::string("id: ") + next.first + std::string("\n") +
+                                                          std::string("data: ") + next.second + std::string("\n\n");
+                                boost::asio::write(s, boost::asio::buffer(event));
+                            }
+                        } catch (const std::exception& e) {
+                            setError(std::string("HTTPServer SSE TLS session error: ") + e.what());
+                        }
+                        boost::system::error_code ec;
+                        s.shutdown(ec);
+                    });
+                    co_return;
+                }
                 auto res = makeResponse(req);
                 co_await http::async_write(tls, res, net::use_awaitable);
                 break; // close after single request
@@ -337,6 +629,103 @@ public:
         return res;
     }
 
+    http::response<http::string_body> handleEndpoint(const http::request<http::string_body>& req) {
+        http::response<http::string_body> res{http::status::accepted, req.version()};
+        res.set(http::field::content_type, "application/json");
+        res.keep_alive(false);
+
+        mcp::auth::TokenInfo info;
+        if (!enforceAuthAndScope(req, res, info)) {
+            return res;
+        }
+        mcp::auth::TokenInfoScope tokenScope(bearerAuthEnabled ? &info : nullptr);
+
+        if (req.method() == http::verb::delete_) {
+            const std::string sessionHeader = std::string(req["Mcp-Session-Id"]);
+            if (sessionHeader.empty()) {
+                res.result(http::status::bad_request);
+                res.body() = std::string("{\"error\":\"Missing session id\"}");
+                res.prepare_payload();
+                return res;
+            }
+            removeSession(sessionHeader);
+            res.result(http::status::no_content);
+            res.body().clear();
+            return res;
+        }
+
+        if (req.method() != http::verb::post) {
+            res.result(http::status::method_not_allowed);
+            res.body() = std::string("{\"error\":\"POST or DELETE required\"}");
+            res.prepare_payload();
+            return res;
+        }
+
+        JSONRPCRequest parsedRequest;
+        JSONRPCNotification parsedNotification;
+        JSONRPCResponse parsedResponse;
+        const bool isRequest = parsedRequest.Deserialize(req.body());
+        const bool isNotification = parsedNotification.Deserialize(req.body());
+        const bool isResponse = parsedResponse.Deserialize(req.body());
+        if (!isRequest && !isNotification && !isResponse) {
+            auto err = CreateErrorResponse(nullptr, JSONRPCErrorCodes::ParseError, "Parse error");
+            res.result(http::status::bad_request);
+            res.body() = err->Serialize();
+            res.prepare_payload();
+            return res;
+        }
+
+        std::shared_ptr<SessionState> session;
+        const std::string sessionHeader = std::string(req["Mcp-Session-Id"]);
+        if (isRequest && parsedRequest.method == Methods::Initialize && sessionHeader.empty()) {
+            std::string protocolVersion = PROTOCOL_VERSION;
+            if (parsedRequest.params.has_value() &&
+                std::holds_alternative<JSONValue::Object>(parsedRequest.params->value)) {
+                const auto& paramsObj = std::get<JSONValue::Object>(parsedRequest.params->value);
+                auto it = paramsObj.find("protocolVersion");
+                if (it != paramsObj.end() && it->second &&
+                    std::holds_alternative<std::string>(it->second->value)) {
+                    protocolVersion = std::get<std::string>(it->second->value);
+                }
+            }
+            session = createSession(protocolVersion);
+        } else {
+            session = findSession(sessionHeader);
+            if (!session) {
+                res.result(http::status::bad_request);
+                res.body() = std::string("{\"error\":\"Missing or invalid session\"}");
+                res.prepare_payload();
+                return res;
+            }
+            if (!validateProtocolHeader(req, session, res)) {
+                return res;
+            }
+        }
+
+        RouterHandlers handlers{};
+        handlers.requestHandler = requestHandler;
+        handlers.notificationHandler = notificationHandler;
+        handlers.errorHandler = errorHandler;
+
+        auto resolve = [this, session](JSONRPCResponse&& response) {
+            if (!resolvePendingResponse(session, std::move(response)) && errorHandler) {
+                errorHandler("HTTPServer: unexpected response received on streamable endpoint");
+            }
+        };
+
+        auto routed = router ? router->route(req.body(), handlers, resolve) : std::optional<std::string>{};
+        res.set("Mcp-Session-Id", session->id);
+        if (routed.has_value()) {
+            res.result(http::status::ok);
+            res.body() = routed.value();
+            res.prepare_payload();
+            return res;
+        }
+        res.body() = std::string("{}");
+        res.prepare_payload();
+        return res;
+    }
+
     http::response<http::string_body> makeResponse(const http::request<http::string_body>& req) {
         http::response<http::string_body> res{http::status::ok, req.version()};
         res.set(http::field::content_type, "application/json");
@@ -345,7 +734,7 @@ public:
         const std::string target = std::string(req.target());
 
         // Serve RFC 9728 metadata at well-known endpoints (GET)
-        std::string basePath = opts.rpcPath;
+        std::string basePath = useStreamableHttp() ? endpointPath() : opts.rpcPath;
         std::string rpcBase;
         auto lastSlash = basePath.rfind('/');
         if (lastSlash != std::string::npos) {
@@ -364,6 +753,10 @@ public:
             res.body() = buildResourceMetadataJson();
             res.prepare_payload();
             return res;
+        }
+
+        if (useStreamableHttp() && target == endpointPath()) {
+            return handleEndpoint(req);
         }
 
         if (req.method() != http::verb::post) {
@@ -487,6 +880,26 @@ std::future<void> HTTPServer::Stop() {
     std::promise<void> done; auto fut = done.get_future();
     try {
         pImpl->running.store(false);
+        {
+            std::lock_guard<std::mutex> lk(pImpl->sessionsMutex);
+            for (auto& kv : pImpl->sessions) {
+                if (!kv.second) {
+                    continue;
+                }
+                std::lock_guard<std::mutex> sessionLock(kv.second->mutex);
+                kv.second->closed = true;
+                for (auto& pending : kv.second->pendingRequests) {
+                    auto resp = std::make_unique<JSONRPCResponse>();
+                    resp->id = pending.first;
+                    resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Transport closed", std::nullopt);
+                    pending.second.set_value(std::move(resp));
+                }
+                kv.second->pendingRequests.clear();
+                kv.second->cv.notify_all();
+            }
+            pImpl->sessions.clear();
+            pImpl->activeSessionId.clear();
+        }
         if (pImpl->acceptor) {
             boost::system::error_code ec; pImpl->acceptor->close(ec);
         }
@@ -494,7 +907,75 @@ std::future<void> HTTPServer::Stop() {
         if (pImpl->ioThread.joinable()) {
             pImpl->ioThread.join();
         }
+        std::lock_guard<std::mutex> lk(pImpl->sseThreadsMutex);
+        for (auto& thread : pImpl->sseThreads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        pImpl->sseThreads.clear();
     } catch (...) {}
+    done.set_value();
+    return fut;
+}
+
+std::future<void> HTTPServer::Close() {
+    return Stop();
+}
+
+bool HTTPServer::IsConnected() const {
+    return pImpl->running.load() && !pImpl->activeSessionId.empty();
+}
+
+std::string HTTPServer::GetSessionId() const {
+    return pImpl->activeSessionId;
+}
+
+std::future<std::unique_ptr<JSONRPCResponse>> HTTPServer::SendRequest(std::unique_ptr<JSONRPCRequest> request) {
+    std::promise<std::unique_ptr<JSONRPCResponse>> promise;
+    auto fut = promise.get_future();
+    auto session = pImpl->activeSession();
+    if (!session || !request) {
+        auto resp = std::make_unique<JSONRPCResponse>();
+        resp->id = request ? request->id : nullptr;
+        resp->error = CreateErrorObject(JSONRPCErrorCodes::InternalError, "No active HTTP session", std::nullopt);
+        promise.set_value(std::move(resp));
+        return fut;
+    }
+
+    std::string idStr;
+    std::visit([&](const auto& id) {
+        using T = std::decay_t<decltype(id)>;
+        if constexpr (std::is_same_v<T, std::string>) {
+            if (!id.empty()) {
+                idStr = id;
+            }
+        } else if constexpr (std::is_same_v<T, int64_t>) {
+            idStr = std::to_string(id);
+        }
+    }, request->id);
+    if (idStr.empty()) {
+        idStr = pImpl->generateRequestId();
+        request->id = idStr;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(session->mutex);
+        session->pendingRequests[idStr] = std::move(promise);
+    }
+    pImpl->queueOutbound(session, request->Serialize());
+    return fut;
+}
+
+std::future<void> HTTPServer::SendNotification(std::unique_ptr<JSONRPCNotification> notification) {
+    std::promise<void> done;
+    auto fut = done.get_future();
+    auto session = pImpl->activeSession();
+    if (!session || !notification) {
+        done.set_value();
+        return fut;
+    }
+    pImpl->queueOutbound(session, notification->Serialize());
     done.set_value();
     return fut;
 }
@@ -589,7 +1070,7 @@ std::unique_ptr<ITransportAcceptor> HTTPServerFactory::CreateTransportAcceptor(c
         if (opts.port.empty()) opts.port = "9443"; // default
     }
 
-    // Parse query parameters: cert, key
+    // Parse query parameters: cert, key, endpoint/stream/rpc/notify paths
     if (!query.empty()) {
         std::stringstream ss(query);
         std::string kv;
@@ -599,6 +1080,10 @@ std::unique_ptr<ITransportAcceptor> HTTPServerFactory::CreateTransportAcceptor(c
             std::string val = (eq == std::string::npos) ? std::string() : kv.substr(eq + 1);
             if (key == "cert") opts.certFile = val;
             else if (key == "key") opts.keyFile = val;
+            else if (key == "endpointPath" || key == "endpoint") opts.endpointPath = val;
+            else if (key == "streamPath" || key == "stream") opts.streamPath = val;
+            else if (key == "rpcPath" || key == "rpc") opts.rpcPath = val;
+            else if (key == "notifyPath" || key == "notify") opts.notifyPath = val;
         }
     }
 

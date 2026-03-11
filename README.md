@@ -27,22 +27,23 @@ docker run --rm --name mcp-cpp-demo --mount type=bind,src=$(pwd),dst=/work mcp-c
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
-wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
+wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/<path-to-repo>/mcp-cpp,dst=/work mcp-cpp-demo"
 ```
 
 ## API Reference
 
 This section summarizes the primary SDK interfaces and feature-specific APIs.
 
-- Client API header: [include/mcp/Client.h](c:/Work/mcp-cpp/include/mcp/Client.h)
-- Server API header: [include/mcp/Server.h](c:/Work/mcp-cpp/include/mcp/Server.h)
-- Transport headers: [include/mcp/Transport.h](c:/Work/mcp-cpp/include/mcp/Transport.h),
-  [include/mcp/InMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/InMemoryTransport.hpp),
-  [include/mcp/StdioTransport.hpp](c:/Work/mcp-cpp/include/mcp/StdioTransport.hpp),
-  [include/mcp/SharedMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/SharedMemoryTransport.hpp),
-  [include/mcp/HTTPTransport.hpp](c:/Work/mcp-cpp/include/mcp/HTTPTransport.hpp)
+- Client API header: [include/mcp/Client.h](./include/mcp/Client.h)
+- Server API header: [include/mcp/Server.h](./include/mcp/Server.h)
+- Transport headers: [include/mcp/Transport.h](./include/mcp/Transport.h),
+  [include/mcp/InMemoryTransport.hpp](./include/mcp/InMemoryTransport.hpp),
+  [include/mcp/StdioTransport.hpp](./include/mcp/StdioTransport.hpp),
+  [include/mcp/SharedMemoryTransport.hpp](./include/mcp/SharedMemoryTransport.hpp),
+  [include/mcp/HTTPTransport.hpp](./include/mcp/HTTPTransport.hpp),
+  [include/mcp/HTTPServer.hpp](./include/mcp/HTTPServer.hpp)
 
 ### Client API (IClient / Client)
 
@@ -54,6 +55,8 @@ This section summarizes the primary SDK interfaces and feature-specific APIs.
 - Subscriptions: `SubscribeResources()`, `SubscribeResources(optional<string> uri)`,
   `UnsubscribeResources()`, `UnsubscribeResources(optional<string> uri)`
 - Prompts: `ListPrompts()`, `ListPromptsPaged(cursor, limit)`, `GetPrompt(name, args)`
+- Utilities: `Complete(params)`, `Ping()`
+- Roots and elicitation: `SetRootsListHandler(handler)`, `NotifyRootsListChanged()`, `SetElicitationHandler(handler)`
 - Sampling (server → client): `SetSamplingHandler(handler)`
 - Notifications & progress: `SetNotificationHandler(method, handler)`, `RemoveNotificationHandler(method)`,
   `SetProgressHandler(handler)`, `SetErrorHandler(handler)`
@@ -74,7 +77,8 @@ ClientCapabilities caps; auto serverCaps = client->Initialize(info, caps).get();
 - Resources: `RegisterResource(uri, handler)`, `UnregisterResource(uri)`, `ListResources()`, `ReadResource(uri)`
 - Resource templates: `RegisterResourceTemplate(t)`, `UnregisterResourceTemplate(template)`, `ListResourceTemplates()`
 - Prompts: `RegisterPrompt(name, handler)`, `UnregisterPrompt(name)`, `ListPrompts()`, `GetPrompt(name, args)`
-- Sampling: `SetSamplingHandler(handler)`, `RequestCreateMessage(params)`
+- Utilities: `SetCompletionHandler(handler)`, `RequestCreateMessage(params)`, `RequestElicitation(request)`, `RequestRootsList()`, `Ping()`
+- Sampling: `SetSamplingHandler(handler)`
 - Keepalive: `SetKeepaliveIntervalMs(intervalMs)`
 - Logging: `LogToClient(level, message, data)`
 - Notifications: `NotifyResourcesListChanged()`, `NotifyResourceUpdated(uri)`, `NotifyToolsListChanged()`, `NotifyPromptsListChanged()`
@@ -87,10 +91,11 @@ ClientCapabilities caps; auto serverCaps = client->Initialize(info, caps).get();
 - Messaging: `SendRequest(req)`, `SendNotification(note)`
 - Handlers: `SetNotificationHandler(h)`, `SetErrorHandler(h)`, `SetRequestHandler(h)`
 - Implementations:
-  - In-memory: [include/mcp/InMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/InMemoryTransport.hpp)
-  - Stdio: [include/mcp/StdioTransport.hpp](c:/Work/mcp-cpp/include/mcp/StdioTransport.hpp)
-  - Shared Memory: [include/mcp/SharedMemoryTransport.hpp](c:/Work/mcp-cpp/include/mcp/SharedMemoryTransport.hpp)
-  - HTTP client: [include/mcp/HTTPTransport.hpp](c:/Work/mcp-cpp/include/mcp/HTTPTransport.hpp)
+  - In-memory: [include/mcp/InMemoryTransport.hpp](./include/mcp/InMemoryTransport.hpp)
+  - Stdio: [include/mcp/StdioTransport.hpp](./include/mcp/StdioTransport.hpp)
+  - Shared Memory: [include/mcp/SharedMemoryTransport.hpp](./include/mcp/SharedMemoryTransport.hpp)
+  - HTTP client: [include/mcp/HTTPTransport.hpp](./include/mcp/HTTPTransport.hpp)
+  - HTTP server/acceptor: [include/mcp/HTTPServer.hpp](./include/mcp/HTTPServer.hpp)
 
 #### HTTP Authentication (Bearer/OAuth2)
 
@@ -207,8 +212,8 @@ Tests use GoogleTest via CMake FetchContent (build-time only). See [BUILD+TEST.M
 
 Build and run the client/server demo using stdio transport (WSL2 PowerShell example below):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
-wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
+wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo --mount type=bind,src=/mnt/c/<path-to-repo>/mcp-cpp,dst=/work mcp-cpp-demo"
 ```
 
 ## Examples

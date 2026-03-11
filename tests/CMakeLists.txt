@@ -34,6 +34,9 @@ add_executable(mcp_tests
   test_keepalive_threshold_config.cpp
   test_negative_api.cpp
   test_client_paging.cpp
+  test_completion_ping.cpp
+  test_content_parity.cpp
+  test_elicitation.cpp
   test_roots.cpp
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp
@@ -71,6 +74,7 @@ add_executable(mcp_tests
   test_http_auth.cpp
   test_http_server_bearer.cpp
   test_http_server_metadata.cpp
+  test_http_streamable.cpp
   test_message_router.cpp
   test_content_framer.cpp
   test_stdio_drainframes.cpp

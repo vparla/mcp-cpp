@@ -1,8 +1,8 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: Validators.h
-// Purpose: Lightweight validators for common MCP response shapes
+// File: include/mcp/validation/Validators.h
+// Purpose: Lightweight validators for common MCP request and response shapes
 //==========================================================================================================
 
 #pragma once
@@ -16,34 +16,170 @@ namespace mcp {
 namespace validation {
 
 //------------------------------ Primitive content checks ------------------------------
-inline bool isTextContentItem(const JSONValue& v) {
+inline bool isObject(const JSONValue& v) {
+    return std::holds_alternative<JSONValue::Object>(v.value);
+}
+
+inline bool isStringField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it != obj.end() && it->second && std::holds_alternative<std::string>(it->second->value);
+}
+
+inline bool isOptionalStringField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it == obj.end() || (it->second && std::holds_alternative<std::string>(it->second->value));
+}
+
+inline bool isOptionalObjectField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it == obj.end() || (it->second && std::holds_alternative<JSONValue::Object>(it->second->value));
+}
+
+inline bool isOptionalBoolField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it == obj.end() || (it->second && std::holds_alternative<bool>(it->second->value));
+}
+
+inline bool isOptionalIntegerField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it == obj.end() || (it->second && std::holds_alternative<int64_t>(it->second->value));
+}
+
+inline bool isAnnotationsShape(const JSONValue& v) {
+    if (!isObject(v)) {
+        return false;
+    }
+    const auto& obj = std::get<JSONValue::Object>(v.value);
+    auto audienceIt = obj.find("audience");
+    if (audienceIt != obj.end()) {
+        if (!audienceIt->second || !std::holds_alternative<JSONValue::Array>(audienceIt->second->value)) {
+            return false;
+        }
+        const auto& arr = std::get<JSONValue::Array>(audienceIt->second->value);
+        for (const auto& item : arr) {
+            if (!item || !std::holds_alternative<std::string>(item->value)) {
+                return false;
+            }
+        }
+    }
+    auto priorityIt = obj.find("priority");
+    if (priorityIt != obj.end()) {
+        if (!priorityIt->second) {
+            return false;
+        }
+        const bool numeric = std::holds_alternative<int64_t>(priorityIt->second->value) ||
+                             std::holds_alternative<double>(priorityIt->second->value);
+        if (!numeric) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool isOptionalAnnotationsField(const JSONValue::Object& obj, const char* key) {
+    auto it = obj.find(key);
+    return it == obj.end() || (it->second && isAnnotationsShape(*it->second));
+}
+
+inline bool isEmbeddedResourceObject(const JSONValue& v) {
     if (!std::holds_alternative<JSONValue::Object>(v.value)) {
         return false;
     }
     const auto& o = std::get<JSONValue::Object>(v.value);
-    auto itType = o.find("type");
-    if (itType == o.end() || !itType->second) {
+    if (!isStringField(o, "uri")) {
         return false;
     }
-    if (!std::holds_alternative<std::string>(itType->second->value)) {
+    const bool hasText = isStringField(o, "text");
+    const bool hasBlob = isStringField(o, "blob");
+    if (hasText == hasBlob) {
         return false;
     }
-    if (std::get<std::string>(itType->second->value) != std::string("text")) {
-        return false;
-    }
-    auto itText = o.find("text");
-    if (itText == o.end() || !itText->second) {
-        return false;
-    }
-    if (!std::holds_alternative<std::string>(itText->second->value)) {
+    if (!isOptionalStringField(o, "mimeType")) {
         return false;
     }
     return true;
 }
 
-inline bool isContentArrayOfText(const std::vector<JSONValue>& arr) {
+inline bool isContentItem(const JSONValue& v) {
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& o = std::get<JSONValue::Object>(v.value);
+    auto itType = o.find("type");
+    if (itType == o.end() || !itType->second || !std::holds_alternative<std::string>(itType->second->value)) {
+        return false;
+    }
+    const auto& type = std::get<std::string>(itType->second->value);
+    if (type == std::string("text")) {
+        if (!isStringField(o, "text")) {
+            return false;
+        }
+    } else if (type == std::string("image") || type == std::string("audio")) {
+        if (!isStringField(o, "mimeType") || !isStringField(o, "data")) {
+            return false;
+        }
+    } else if (type == std::string("resource_link")) {
+        if (!isStringField(o, "uri") || !isStringField(o, "name")) {
+            return false;
+        }
+        if (!isOptionalStringField(o, "title") ||
+            !isOptionalStringField(o, "description") ||
+            !isOptionalStringField(o, "mimeType") ||
+            !isOptionalIntegerField(o, "size")) {
+            return false;
+        }
+    } else if (type == std::string("resource")) {
+        auto itRes = o.find("resource");
+        if (itRes == o.end() || !itRes->second || !isEmbeddedResourceObject(*itRes->second)) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    if (!isOptionalAnnotationsField(o, "annotations")) {
+        return false;
+    }
+    return true;
+}
+
+inline bool isTextContentItem(const JSONValue& v) {
+    if (!isContentItem(v)) {
+        return false;
+    }
+    const auto& o = std::get<JSONValue::Object>(v.value);
+    auto itType = o.find("type");
+    return itType != o.end() && itType->second &&
+           std::holds_alternative<std::string>(itType->second->value) &&
+           std::get<std::string>(itType->second->value) == std::string("text");
+}
+
+inline bool isContentArray(const std::vector<JSONValue>& arr) {
     for (const auto& item : arr) {
-        if (!isTextContentItem(item)) {
+        if (!isContentItem(item)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline bool isPromptMessageItem(const JSONValue& v) {
+    if (isContentItem(v)) {
+        return true;
+    }
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& obj = std::get<JSONValue::Object>(v.value);
+    if (!isStringField(obj, "role")) {
+        return false;
+    }
+    auto contentIt = obj.find("content");
+    if (contentIt == obj.end() || !contentIt->second || !std::holds_alternative<JSONValue::Array>(contentIt->second->value)) {
+        return false;
+    }
+    const auto& arr = std::get<JSONValue::Array>(contentIt->second->value);
+    for (const auto& item : arr) {
+        if (!item || !isContentItem(*item)) {
             return false;
         }
     }
@@ -68,9 +204,21 @@ inline bool validateCallToolResultJson(const JSONValue& v) {
         if (!p) {
             return false;
         }
-        if (!isTextContentItem(*p)) {
+        if (!isContentItem(*p)) {
             return false;
         }
+    }
+    auto isErrorIt = obj.find("isError");
+    if (isErrorIt != obj.end() && (!isErrorIt->second || !std::holds_alternative<bool>(isErrorIt->second->value))) {
+        return false;
+    }
+    auto structuredIt = obj.find("structuredContent");
+    if (structuredIt != obj.end() && !structuredIt->second) {
+        return false;
+    }
+    auto metaIt = obj.find("_meta");
+    if (metaIt != obj.end() && !metaIt->second) {
+        return false;
     }
     return true;
 }
@@ -92,9 +240,13 @@ inline bool validateReadResourceResultJson(const JSONValue& v) {
         if (!p) {
             return false;
         }
-        if (!isTextContentItem(*p)) {
+        if (!isContentItem(*p)) {
             return false;
         }
+    }
+    auto metaIt = obj.find("_meta");
+    if (metaIt != obj.end() && !metaIt->second) {
+        return false;
     }
     return true;
 }
@@ -117,11 +269,93 @@ inline bool validateGetPromptResultJson(const JSONValue& v) {
         if (!p) {
             return false;
         }
-        if (!isTextContentItem(*p)) {
+        if (!isPromptMessageItem(*p)) {
             return false;
         }
     }
     return true;
+}
+
+inline bool validateCompletionResultJson(const JSONValue& v) {
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& obj = std::get<JSONValue::Object>(v.value);
+    auto completionIt = obj.find("completion");
+    if (completionIt == obj.end() || !completionIt->second || !std::holds_alternative<JSONValue::Object>(completionIt->second->value)) {
+        return false;
+    }
+    const auto& completionObj = std::get<JSONValue::Object>(completionIt->second->value);
+    auto valuesIt = completionObj.find("values");
+    if (valuesIt == completionObj.end() || !valuesIt->second || !std::holds_alternative<JSONValue::Array>(valuesIt->second->value)) {
+        return false;
+    }
+    const auto& values = std::get<JSONValue::Array>(valuesIt->second->value);
+    for (const auto& item : values) {
+        if (!item || !std::holds_alternative<std::string>(item->value)) {
+            return false;
+        }
+    }
+    if (!isOptionalIntegerField(completionObj, "total")) {
+        return false;
+    }
+    if (!isOptionalBoolField(completionObj, "hasMore")) {
+        return false;
+    }
+    return true;
+}
+
+inline bool validateElicitationRequestJson(const JSONValue& v) {
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& obj = std::get<JSONValue::Object>(v.value);
+    if (!isStringField(obj, "message")) {
+        return false;
+    }
+    auto schemaIt = obj.find("requestedSchema");
+    if (schemaIt == obj.end() || !schemaIt->second) {
+        return false;
+    }
+    if (!isOptionalStringField(obj, "title") ||
+        !isOptionalStringField(obj, "mode") ||
+        !isOptionalStringField(obj, "url") ||
+        !isOptionalStringField(obj, "elicitationId")) {
+        return false;
+    }
+    auto metadataIt = obj.find("metadata");
+    if (metadataIt != obj.end() && !metadataIt->second) {
+        return false;
+    }
+    return true;
+}
+
+inline bool validateElicitationResultJson(const JSONValue& v) {
+    if (!std::holds_alternative<JSONValue::Object>(v.value)) {
+        return false;
+    }
+    const auto& obj = std::get<JSONValue::Object>(v.value);
+    if (!isStringField(obj, "action")) {
+        return false;
+    }
+    const auto& action = std::get<std::string>(obj.at("action")->value);
+    if (action != std::string("accept") &&
+        action != std::string("decline") &&
+        action != std::string("cancel")) {
+        return false;
+    }
+    auto contentIt = obj.find("content");
+    if (contentIt != obj.end() && !contentIt->second) {
+        return false;
+    }
+    if (!isOptionalStringField(obj, "elicitationId")) {
+        return false;
+    }
+    return true;
+}
+
+inline bool validatePingResultJson(const JSONValue& v) {
+    return std::holds_alternative<JSONValue::Object>(v.value);
 }
 
 //------------------------------ List endpoints (JSON validators) ------------------------------------------
@@ -144,6 +378,10 @@ inline bool validateToolsListResultJson(const JSONValue& v) {
         auto d = to.find("description"); if (d == to.end() || !d->second || !std::holds_alternative<std::string>(d->second->value)) { return false; }
         // inputSchema may be any JSONValue; if present ensure pointer exists
         auto s = to.find("inputSchema"); if (s != to.end() && !s->second) { return false; }
+        auto os = to.find("outputSchema"); if (os != to.end() && !os->second) { return false; }
+        if (!isOptionalAnnotationsField(to, "annotations")) { return false; }
+        auto ex = to.find("execution"); if (ex != to.end() && !ex->second) { return false; }
+        auto meta = to.find("_meta"); if (meta != to.end() && !meta->second) { return false; }
     }
     auto nc = o.find("nextCursor");
     if (nc != o.end()) {
@@ -269,15 +507,15 @@ inline bool validateCreateMessageParamsJson(const JSONValue& v) {
         if (!m || !std::holds_alternative<JSONValue::Object>(m->value)) return false;
         const auto& mo = std::get<JSONValue::Object>(m->value);
         auto c = mo.find("content");
-        if (c != mo.end()) {
-            if (!c->second || !std::holds_alternative<JSONValue::Array>(c->second->value)) return false;
-            const auto& carr = std::get<JSONValue::Array>(c->second->value);
-            for (const auto& ci : carr) {
-                if (!ci) return false;
-                if (!isTextContentItem(*ci)) return false;
+            if (c != mo.end()) {
+                if (!c->second || !std::holds_alternative<JSONValue::Array>(c->second->value)) return false;
+                const auto& carr = std::get<JSONValue::Array>(c->second->value);
+                for (const auto& ci : carr) {
+                    if (!ci) return false;
+                    if (!isContentItem(*ci)) return false;
+                }
             }
         }
-    }
     // modelPreferences/systemPrompt/includeContext are optional, any JSON types accepted
     return true;
 }
@@ -291,7 +529,7 @@ inline bool validateCreateMessageResultJson(const JSONValue& v) {
     const auto& arr = std::get<JSONValue::Array>(cont->second->value);
     for (const auto& ci : arr) {
         if (!ci) return false;
-        if (!isTextContentItem(*ci)) return false;
+        if (!isContentItem(*ci)) return false;
     }
     // stopReason optional
     return true;
@@ -299,16 +537,21 @@ inline bool validateCreateMessageResultJson(const JSONValue& v) {
 
 //------------------------------ Typed struct validators (for server-side before serialize) --------------
 inline bool validateCallToolResult(const CallToolResult& r) {
-    return isContentArrayOfText(r.content);
+    return isContentArray(r.content);
 }
 
 inline bool validateReadResourceResult(const ReadResourceResult& r) {
-    return isContentArrayOfText(r.contents);
+    return isContentArray(r.contents);
 }
 
 inline bool validateGetPromptResult(const GetPromptResult& r) {
     // description can be empty but must be present when serialized by server logic
-    return isContentArrayOfText(r.messages);
+    for (const auto& item : r.messages) {
+        if (!isPromptMessageItem(item)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace validation

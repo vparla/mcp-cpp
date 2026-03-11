@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: ClientTyped.h
+// File: include/mcp/typed/ClientTyped.h
 // Purpose: Header-only typed client wrappers for tools/resources/prompts (+ paging helpers)
 //==========================================================================================================
 
@@ -238,6 +238,14 @@ inline CallToolResult parseCallToolResult(const JSONValue& v) {
     auto e = obj.find("isError");
     if (e != obj.end() && std::holds_alternative<bool>(e->second->value)) {
         out.isError = std::get<bool>(e->second->value);
+    }
+    auto structured = obj.find("structuredContent");
+    if (structured != obj.end() && structured->second) {
+        out.structuredContent = *structured->second;
+    }
+    auto meta = obj.find("_meta");
+    if (meta != obj.end() && meta->second) {
+        out.meta = *meta->second;
     }
     return out;
 }

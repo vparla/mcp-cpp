@@ -1,7 +1,7 @@
 //==========================================================================================================
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2025 Vinny Parla
-// File: Server.cpp
+// File: src/mcp/Server.cpp
 // Purpose: MCP server implementation
 //==========================================================================================================
 #include <algorithm>
@@ -45,6 +45,8 @@ private:
     mcp::async::Task<RootsListResult> coRequestRootsList();
     mcp::async::Task<JSONValue> coRequestCreateMessage(const CreateMessageParams& params);
     mcp::async::Task<JSONValue> coRequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId);
+    mcp::async::Task<ElicitationResult> coRequestElicitation(const ElicitationRequest& request);
+    mcp::async::Task<void> coPing();
     mcp::async::Task<void> coSendNotification(const std::string& method, const JSONValue& params);
     mcp::async::Task<void> coNotifyResourcesListChanged();
     mcp::async::Task<void> coNotifyToolsListChanged();
@@ -76,6 +78,7 @@ private:
     std::atomic<bool> resourcesSubscribed{false};
     std::unordered_set<std::string> subscribedUris; // per-URI subscriptions
     IServer::SamplingHandler samplingHandler;       // optional sampling handler
+    CompletionHandler completionHandler;            // optional completion handler
 
     // Keepalive state
     std::atomic<int> keepaliveIntervalMs{-1};
@@ -177,6 +180,15 @@ private:
         to["description"] = std::make_shared<JSONValue>(t.description);
         // inputSchema may be empty JSONValue
         to["inputSchema"] = std::make_shared<JSONValue>(t.inputSchema);
+        if (t.outputSchema.has_value()) {
+            to["outputSchema"] = std::make_shared<JSONValue>(t.outputSchema.value());
+        }
+        if (t.annotations.has_value()) {
+            to["annotations"] = std::make_shared<JSONValue>(t.annotations.value());
+        }
+        if (t.execution.has_value()) {
+            to["execution"] = std::make_shared<JSONValue>(t.execution.value());
+        }
         if (t.meta.has_value()) {
             to["_meta"] = std::make_shared<JSONValue>(t.meta.value());
         }
@@ -473,6 +485,12 @@ private:
         content.push_back(std::make_shared<JSONValue>(std::move(v)));
     }
     obj["content"] = std::make_shared<JSONValue>(content);
+    if (tr.structuredContent.has_value()) {
+        obj["structuredContent"] = std::make_shared<JSONValue>(tr.structuredContent.value());
+    }
+    if (tr.meta.has_value()) {
+        obj["_meta"] = std::make_shared<JSONValue>(tr.meta.value());
+    }
     obj["isError"] = std::make_shared<JSONValue>(tr.isError);
     JSONValue result{obj};
     if (this->validationMode == validation::ValidationMode::Strict) {
@@ -829,6 +847,11 @@ private:
             JSONValue::Object samplingObj;
             caps["sampling"] = std::make_shared<JSONValue>(samplingObj);
         }
+
+        if (capabilities.completions.has_value()) {
+            JSONValue::Object completionsObj;
+            caps["completions"] = std::make_shared<JSONValue>(completionsObj);
+        }
         
         // Advertise logging capability if present
         if (capabilities.logging.has_value()) {
@@ -845,6 +868,7 @@ private:
             
             auto capsIt = obj.find("capabilities");
             if (capsIt != obj.end() && std::holds_alternative<JSONValue::Object>((*capsIt->second).value)) {
+                clientCapabilities = ClientCapabilities{};
                 const auto& capsObj = std::get<JSONValue::Object>((*capsIt->second).value);
                 
                 // Parse sampling capability
@@ -865,6 +889,24 @@ private:
                         }
                     }
                     clientCapabilities.roots = rootsCap;
+                }
+                auto elicitationIt = capsObj.find("elicitation");
+                if (elicitationIt != capsObj.end()) {
+                    ElicitationCapability elicitationCap{};
+                    if (elicitationIt->second && std::holds_alternative<JSONValue::Object>((*elicitationIt->second).value)) {
+                        const auto& elicitationObj = std::get<JSONValue::Object>((*elicitationIt->second).value);
+                        auto modesIt = elicitationObj.find("modes");
+                        if (modesIt != elicitationObj.end() && modesIt->second &&
+                            std::holds_alternative<JSONValue::Array>(modesIt->second->value)) {
+                            const auto& modes = std::get<JSONValue::Array>(modesIt->second->value);
+                            for (const auto& mode : modes) {
+                                if (mode && std::holds_alternative<std::string>(mode->value)) {
+                                    elicitationCap.modes.push_back(std::get<std::string>(mode->value));
+                                }
+                            }
+                        }
+                    }
+                    clientCapabilities.elicitation = elicitationCap;
                 }
                 // Parse extensions (optional per SEP-1724), store verbatim as JSONValue by key
                 auto extIt = capsObj.find("extensions");
@@ -931,6 +973,69 @@ private:
         response->result = serializePromptResult(result);
         return response;
     }
+
+    std::unique_ptr<JSONRPCResponse> handleCompleteRequest(const JSONRPCRequest& request) {
+        LOG_DEBUG("Handling completion/complete request");
+        if (!completionHandler || !request.params.has_value() ||
+            !std::holds_alternative<JSONValue::Object>(request.params->value)) {
+            errors::McpError e;
+            e.code = completionHandler ? JSONRPCErrorCodes::InvalidParams : JSONRPCErrorCodes::MethodNotAllowed;
+            e.message = completionHandler ? "Invalid params" : "No completion handler registered";
+            return errors::makeErrorResponse(request.id, e);
+        }
+
+        CompleteParams params;
+        const auto& obj = std::get<JSONValue::Object>(request.params->value);
+        auto refIt = obj.find("ref");
+        auto argIt = obj.find("argument");
+        if (refIt == obj.end() || !refIt->second || argIt == obj.end() || !argIt->second ||
+            !std::holds_alternative<JSONValue::Object>(argIt->second->value)) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+            return errors::makeErrorResponse(request.id, e);
+        }
+        params.ref = *refIt->second;
+        const auto& argumentObj = std::get<JSONValue::Object>(argIt->second->value);
+        auto nameIt = argumentObj.find("name");
+        auto valueIt = argumentObj.find("value");
+        if (nameIt == argumentObj.end() || !nameIt->second || valueIt == argumentObj.end() || !valueIt->second ||
+            !std::holds_alternative<std::string>(nameIt->second->value) ||
+            !std::holds_alternative<std::string>(valueIt->second->value)) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid params";
+            return errors::makeErrorResponse(request.id, e);
+        }
+        params.argument.name = std::get<std::string>(nameIt->second->value);
+        params.argument.value = std::get<std::string>(valueIt->second->value);
+        auto contextIt = obj.find("context");
+        if (contextIt != obj.end() && contextIt->second) {
+            params.context = *contextIt->second;
+        }
+
+        CompletionResult completion = completionHandler(params).get();
+        JSONValue::Array values;
+        for (const auto& value : completion.values) {
+            values.push_back(std::make_shared<JSONValue>(value));
+        }
+        JSONValue::Object completionObj;
+        completionObj["values"] = std::make_shared<JSONValue>(values);
+        if (completion.total.has_value()) {
+            completionObj["total"] = std::make_shared<JSONValue>(completion.total.value());
+        }
+        completionObj["hasMore"] = std::make_shared<JSONValue>(completion.hasMore);
+
+        JSONValue::Object resultObj;
+        resultObj["completion"] = std::make_shared<JSONValue>(JSONValue{completionObj});
+        JSONValue result{resultObj};
+        if (validationMode == validation::ValidationMode::Strict &&
+            !validation::validateCompletionResultJson(result)) {
+            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid completion result shape";
+            return errors::makeErrorResponse(request.id, e);
+        }
+
+        auto response = std::make_unique<JSONRPCResponse>();
+        response->id = request.id;
+        response->result = result;
+        return response;
+    }
 };
 
 //============================ Impl coroutine helper definitions ============================
@@ -985,7 +1090,12 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         auto token = this->registerCancelToken(idStr);
         struct ScopeGuard { std::function<void()> f; ~ScopeGuard(){ if (f) f(); } } guard{ [this, idStr](){ this->unregisterCancelToken(idStr); } };
 
-        if (req.method == Methods::Initialize) {
+        if (req.method == Methods::Ping) {
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = JSONValue{JSONValue::Object{}};
+            return resp;
+        } else if (req.method == Methods::Initialize) {
             auto resp = this->handleInitialize(req);
             // Only send notifications when a transport is present and connected
             if (this->transport && this->transport->IsConnected()) {
@@ -1003,6 +1113,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
                 return errors::makeErrorResponse(req.id, err);
             }
             return r;
+        } else if (req.method == Methods::Complete) {
+            return this->handleCompleteRequest(req);
         } else if (req.method == Methods::ListResources) {
             return this->handleResourcesList(req);
         } else if (req.method == Methods::ListResourceTemplates) {
@@ -1707,6 +1819,105 @@ mcp::async::Task<JSONValue> Server::Impl::coRequestCreateMessageWithId(const Cre
     co_return JSONValue{};
 }
 
+mcp::async::Task<ElicitationResult> Server::Impl::coRequestElicitation(const ElicitationRequest& request) {
+    FUNC_SCOPE();
+    ElicitationResult out;
+    if (!this->transport) {
+        LOG_ERROR("RequestElicitation called without transport");
+        co_return out;
+    }
+    if (!this->clientCapabilities.elicitation.has_value()) {
+        LOG_ERROR("RequestElicitation called but client did not advertise elicitation capability");
+        co_return out;
+    }
+
+    auto rpc = std::make_unique<JSONRPCRequest>();
+    rpc->method = Methods::Elicit;
+    JSONValue::Object paramsObj;
+    paramsObj["message"] = std::make_shared<JSONValue>(request.message);
+    paramsObj["requestedSchema"] = std::make_shared<JSONValue>(request.requestedSchema);
+    if (request.title.has_value()) {
+        paramsObj["title"] = std::make_shared<JSONValue>(request.title.value());
+    }
+    if (request.mode.has_value()) {
+        paramsObj["mode"] = std::make_shared<JSONValue>(request.mode.value());
+    }
+    if (request.url.has_value()) {
+        paramsObj["url"] = std::make_shared<JSONValue>(request.url.value());
+    }
+    if (request.elicitationId.has_value()) {
+        paramsObj["elicitationId"] = std::make_shared<JSONValue>(request.elicitationId.value());
+    }
+    if (request.metadata.has_value()) {
+        paramsObj["metadata"] = std::make_shared<JSONValue>(request.metadata.value());
+    }
+    JSONValue paramsValue{paramsObj};
+    if (this->validationMode == validation::ValidationMode::Strict &&
+        !validation::validateElicitationRequestJson(paramsValue)) {
+        throw std::runtime_error("Validation failed: elicitation/create params shape");
+    }
+    rpc->params = paramsValue;
+
+    auto fut = this->transport->SendRequest(std::move(rpc));
+    try {
+        auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (!response || response->IsError() || !response->result.has_value()) {
+            co_return out;
+        }
+        if (this->validationMode == validation::ValidationMode::Strict &&
+            !validation::validateElicitationResultJson(response->result.value())) {
+            throw std::runtime_error("Validation failed: elicitation/create result shape");
+        }
+        const auto& rv = response->result.value();
+        if (std::holds_alternative<JSONValue::Object>(rv.value)) {
+            const auto& obj = std::get<JSONValue::Object>(rv.value);
+            auto actionIt = obj.find("action");
+            if (actionIt != obj.end() && actionIt->second &&
+                std::holds_alternative<std::string>(actionIt->second->value)) {
+                out.action = std::get<std::string>(actionIt->second->value);
+            }
+            auto contentIt = obj.find("content");
+            if (contentIt != obj.end() && contentIt->second) {
+                out.content = *contentIt->second;
+            }
+            auto idIt = obj.find("elicitationId");
+            if (idIt != obj.end() && idIt->second &&
+                std::holds_alternative<std::string>(idIt->second->value)) {
+                out.elicitationId = std::get<std::string>(idIt->second->value);
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("RequestElicitation exception: {}", e.what());
+        throw;
+    }
+    co_return out;
+}
+
+mcp::async::Task<void> Server::Impl::coPing() {
+    FUNC_SCOPE();
+    if (!this->transport) {
+        LOG_ERROR("Ping called without transport");
+        co_return;
+    }
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::Ping;
+    auto fut = this->transport->SendRequest(std::move(request));
+    try {
+        auto response = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        if (!response || response->IsError() || !response->result.has_value()) {
+            throw std::runtime_error("ping failed");
+        }
+        if (this->validationMode == validation::ValidationMode::Strict &&
+            !validation::validatePingResultJson(response->result.value())) {
+            throw std::runtime_error("Validation failed: ping result shape");
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Ping exception: {}", e.what());
+        throw;
+    }
+    co_return;
+}
+
 Server::Server(const std::string& serverInfo)
     : pImpl(std::unique_ptr<Impl>(new Impl())) {
     FUNC_SCOPE();
@@ -1977,6 +2188,16 @@ void Server::SetSamplingHandler(SamplingHandler handler) {
     pImpl->capabilities.sampling = SamplingCapability{};
 }
 
+void Server::SetCompletionHandler(CompletionHandler handler) {
+    FUNC_SCOPE();
+    pImpl->completionHandler = std::move(handler);
+    if (pImpl->completionHandler) {
+        pImpl->capabilities.completions = CompletionsCapability{};
+    } else {
+        pImpl->capabilities.completions.reset();
+    }
+}
+
 void Server::SetKeepaliveIntervalMs(const std::optional<int>& intervalMs) {
     FUNC_SCOPE();
     int ms = intervalMs.has_value() ? intervalMs.value() : -1;
@@ -2122,9 +2343,19 @@ std::future<JSONValue> Server::RequestCreateMessage(const CreateMessageParams& p
     return pImpl->coRequestCreateMessage(params).toFuture();
 }
 
+std::future<ElicitationResult> Server::RequestElicitation(const ElicitationRequest& request) {
+    FUNC_SCOPE();
+    return pImpl->coRequestElicitation(request).toFuture();
+}
+
 std::future<RootsListResult> Server::RequestRootsList() {
     FUNC_SCOPE();
     return pImpl->coRequestRootsList().toFuture();
+}
+
+std::future<void> Server::Ping() {
+    FUNC_SCOPE();
+    return pImpl->coPing().toFuture();
 }
 
 std::future<JSONValue> Server::RequestCreateMessageWithId(const CreateMessageParams& params, const std::string& requestId) {
