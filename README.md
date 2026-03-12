@@ -49,7 +49,8 @@ This section summarizes the primary SDK interfaces and feature-specific APIs.
 
 - Connection: `Connect(transport)`, `Disconnect()`, `IsConnected()`
 - Initialize: `Initialize(clientInfo, capabilities)` → `ServerCapabilities`
-- Tools: `ListTools()`, `ListToolsPaged(cursor, limit)`, `CallTool(name, args)`
+- Tools: `ListTools()`, `ListToolsPaged(cursor, limit)`, `CallTool(name, args)`, `CallToolTask(name, args, task)`
+- Tasks: `GetTask(taskId)`, `ListTasks()`, `ListTasksPaged(cursor, limit)`, `GetTaskResult(taskId)`, `CancelTask(taskId)`
 - Resources: `ListResources()`, `ListResourcesPaged(cursor, limit)`, `ReadResource(uri)`
 - Resource templates: `ListResourceTemplates()`, `ListResourceTemplatesPaged(cursor, limit)`
 - Subscriptions: `SubscribeResources()`, `SubscribeResources(optional<string> uri)`,
@@ -73,11 +74,12 @@ ClientCapabilities caps; auto serverCaps = client->Initialize(info, caps).get();
 
 - Lifecycle: `Start(transport)`, `Stop()`, `IsRunning()`
 - Initialize: `HandleInitialize(clientInfo, capabilities)`
-- Tools: `RegisterTool(name, handler)` or `RegisterTool(tool, handler)`, `UnregisterTool(name)`, `ListTools()`, `CallTool(name, args)`
-- Resources: `RegisterResource(uri, handler)`, `UnregisterResource(uri)`, `ListResources()`, `ReadResource(uri)`
+- Tools: `RegisterTool(name, handler)` or `RegisterTool(tool, handler)`, `UnregisterTool(name)`, `ListTools()`, `CallTool(name, args)`, `CallToolTask(name, args, task)`
+- Tasks: `GetTask(taskId)`, `ListTasks()`, `ListTasksPaged(cursor, limit)`, `GetTaskResult(taskId)`, `CancelTask(taskId)`
+- Resources: `RegisterResource(uri, handler)` or `RegisterResource(resource, handler)`, `UnregisterResource(uri)`, `ListResources()`, `ReadResource(uri)`
 - Resource templates: `RegisterResourceTemplate(t)`, `UnregisterResourceTemplate(template)`, `ListResourceTemplates()`
-- Prompts: `RegisterPrompt(name, handler)`, `UnregisterPrompt(name)`, `ListPrompts()`, `GetPrompt(name, args)`
-- Utilities: `SetCompletionHandler(handler)`, `RequestCreateMessage(params)`, `RequestElicitation(request)`, `RequestRootsList()`, `Ping()`
+- Prompts: `RegisterPrompt(name, handler)` or `RegisterPrompt(prompt, handler)`, `UnregisterPrompt(name)`, `ListPrompts()`, `GetPrompt(name, args)`
+- Utilities: `SetCompletionHandler(handler)`, `RequestCreateMessage(params)`, `RequestCreateMessageTask(params, task)`, `RequestElicitation(request)`, `RequestElicitationTask(request, task)`, `RequestRootsList()`, `Ping()`
 - Sampling: `SetSamplingHandler(handler)`
 - Keepalive: `SetKeepaliveIntervalMs(intervalMs)`
 - Logging: `LogToClient(level, message, data)`

@@ -158,6 +158,9 @@ TEST(ArchitectureValidation, ServerPathsUseCanonicalValidatorsAndMethodConstants
             "validation::validateReadResourceResultJson",
             "validation::validateGetPromptResult",
             "validation::validateCompletionResultJson",
+            "validation::validateTaskJson",
+            "validation::validateTasksListResultJson",
+            "validation::validateCreateTaskResultJson",
             "validation::validateCreateMessageParamsJson",
             "validation::validateCreateMessageResultJson",
             "validation::validateElicitationRequestJson",
@@ -174,6 +177,10 @@ TEST(ArchitectureValidation, ServerPathsUseCanonicalValidatorsAndMethodConstants
             "req.method == Methods::ListTools",
             "req.method == Methods::CallTool",
             "req.method == Methods::Complete",
+            "req.method == Methods::GetTask",
+            "req.method == Methods::ListTasks",
+            "req.method == Methods::GetTaskResult",
+            "req.method == Methods::CancelTask",
             "req.method == Methods::ListResources",
             "req.method == Methods::ReadResource",
             "req.method == Methods::ListPrompts",
@@ -185,6 +192,7 @@ TEST(ArchitectureValidation, ServerPathsUseCanonicalValidatorsAndMethodConstants
         text,
         {
             "notification->method == Methods::RootListChanged",
+            "notification->method == Methods::TaskStatus",
         },
         "Server.cpp notifications");
 
@@ -204,6 +212,10 @@ TEST(ArchitectureValidation, ClientStrictPathsUseCanonicalValidators) {
             "validation::validateCreateMessageParamsJson",
             "validation::validateCreateMessageResultJson",
             "validation::validateCompletionResultJson",
+            "validation::validateTaskJson",
+            "validation::validateTasksListResultJson",
+            "validation::validateCreateTaskResultJson",
+            "validation::validateTaskStatusNotificationParamsJson",
             "validation::validateElicitationRequestJson",
             "validation::validateElicitationResultJson",
             "validation::validatePingResultJson",
@@ -214,7 +226,12 @@ TEST(ArchitectureValidation, ClientStrictPathsUseCanonicalValidators) {
             "validation::validateRootsListResultJson",
             "req.method == Methods::Ping",
             "req.method == Methods::Elicit",
+            "req.method == Methods::GetTask",
+            "req.method == Methods::ListTasks",
+            "req.method == Methods::GetTaskResult",
+            "req.method == Methods::CancelTask",
             "req.method == Methods::ListRoots",
+            "n->method == Methods::TaskStatus",
         },
         "Client.cpp");
 }

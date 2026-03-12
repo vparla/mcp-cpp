@@ -13,12 +13,15 @@ This matrix tracks the MCP C++ SDK feature coverage relative to the MCP spec.
   - List tools (paged): Implemented
   - Call tool (server → client): Implemented
   - Input schema (tool metadata): Implemented (tests: `ToolsInputSchema.*` in `tests/test_tools_inputschema.cpp`)
+  - Icon and title metadata: Implemented (`tests/test_icon_parity.cpp`)
   - List-changed notifications: Implemented (one-time on initialize)
 
 - Resources
   - List resources (paged): Implemented
+  - Resource metadata (`title`, `size`, `annotations`, `_meta`, `icons`): Implemented (`tests/test_icon_parity.cpp`)
   - Read resource (server → client): Implemented (shape covered by tests)
   - Resource templates (list, register/unregister): Implemented (`tests/test_resource_templates.cpp`)
+  - Resource template metadata (`title`, `annotations`, `_meta`, `icons`): Implemented (`tests/test_icon_parity.cpp`)
   - Subscriptions (global and per-URI): Implemented (`tests/test_resource_subscriptions.cpp`)
   - List/updated notifications: Implemented
   - Read chunking (experimental offset/length): Implemented (`tests/test_resource_read_chunking.cpp`, `tests/test_resource_read_chunking_capability_absence.cpp`)
@@ -26,6 +29,7 @@ This matrix tracks the MCP C++ SDK feature coverage relative to the MCP spec.
 
 - Prompts
   - List prompts (paged): Implemented
+  - Prompt metadata (`title`, `arguments`, `_meta`, `icons`): Implemented (`tests/test_icon_parity.cpp`)
   - Get prompt: Implemented (returns `PromptResult.messages`)
   - List-changed notifications: Implemented
 
@@ -34,12 +38,19 @@ This matrix tracks the MCP C++ SDK feature coverage relative to the MCP spec.
   - `completion/complete`: Implemented
   - `roots/list` and `notifications/roots/list_changed`: Implemented
   - `elicitation/create`: Implemented
+  - `tasks/get`, `tasks/list`, `tasks/result`, and `tasks/cancel`: Implemented (`tests/test_tasks.cpp`)
 
 - Sampling
   - Client-registered sampling handler: Implemented (client API)
   - Server-initiated `sampling/createMessage`: Implemented (`tests/test_server_initiated_sampling.cpp`)
   - Capability advertisement: Implemented (only when handler set)
   - Server-initiated cancellation (E2E) via `notifications/cancelled`: Implemented (`tests/test_sampling_cancellation_e2e.cpp`)
+
+- Tasks
+  - Task capability negotiation: Implemented for server tool tasks and client sampling/elicitation tasks
+  - Task-augmented `tools/call`: Implemented
+  - Task-augmented `sampling/createMessage` and `elicitation/create`: Implemented
+  - `notifications/tasks/status`: Implemented
 
 - Cancellation
   - Cancellation propagation to long-running handlers: Implemented (`tests/test_cancellation.cpp`)
@@ -98,12 +109,14 @@ Notes:
   - List (paged): Implemented.
   - Call: Implemented.
   - Input schema metadata: Implemented.
+  - Title/icon metadata: Implemented.
   - List-changed notifications: Implemented, single-shot post-init.
   - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h), [src/mcp/Server.cpp](../src/mcp/Server.cpp), [src/mcp/Client.cpp](../src/mcp/Client.cpp)
   - Tests: [tests/test_client_paging.cpp](../tests/test_client_paging.cpp), [tests/test_tools_inputschema.cpp](../tests/test_tools_inputschema.cpp)
 
 - **[Resources]**
   - List (paged), Read, Templates (list/register/unregister): Implemented.
+  - Resource/resource-template metadata parity for icons and related list metadata: Implemented.
   - Subscriptions: global and per-URI; filtered `notifications/resources/updated`.
   - List/updated notifications: Implemented.
   - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h), [src/mcp/Server.cpp](../src/mcp/Server.cpp)
@@ -111,8 +124,9 @@ Notes:
 
 - **[Prompts]**
   - List (paged), Get prompt returns `messages` with correct shape.
+  - Title/icon metadata and richer list metadata: Implemented.
   - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h)
-  - Tests: [tests/test_prompts_get.cpp](../tests/test_prompts_get.cpp), [tests/test_client_paging.cpp](../tests/test_client_paging.cpp)
+  - Tests: [tests/test_prompts_get.cpp](../tests/test_prompts_get.cpp), [tests/test_client_paging.cpp](../tests/test_client_paging.cpp), [tests/test_icon_parity.cpp](../tests/test_icon_parity.cpp)
 
 - **[Utilities: Ping, Completion, Roots, Elicitation]**
   - `ping`: Implemented for client->server and server->client flows.
@@ -121,6 +135,13 @@ Notes:
   - `elicitation/create`: Implemented with strict validation and typed request/result parsing.
   - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h), [src/mcp/Client.cpp](../src/mcp/Client.cpp), [src/mcp/Server.cpp](../src/mcp/Server.cpp)
   - Tests: [tests/test_completion_ping.cpp](../tests/test_completion_ping.cpp), [tests/test_roots.cpp](../tests/test_roots.cpp), [tests/test_elicitation.cpp](../tests/test_elicitation.cpp)
+
+- **[Tasks]**
+  - Task capability negotiation for server-side `tools/call` and client-side `sampling/createMessage` / `elicitation/create`.
+  - `tasks/get`, `tasks/list`, `tasks/result`, and `tasks/cancel`: Implemented.
+  - `notifications/tasks/status`: Implemented on both requestor sides.
+  - Sources: [include/mcp/Protocol.h](../include/mcp/Protocol.h), [src/mcp/Client.cpp](../src/mcp/Client.cpp), [src/mcp/Server.cpp](../src/mcp/Server.cpp)
+  - Tests: [tests/test_tasks.cpp](../tests/test_tasks.cpp)
 
 - **[Sampling (Server → Client)]**
   - Server-initiated `sampling/createMessage` with optional cancelable handler on client.

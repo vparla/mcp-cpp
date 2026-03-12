@@ -36,7 +36,9 @@ add_executable(mcp_tests
   test_client_paging.cpp
   test_completion_ping.cpp
   test_content_parity.cpp
+  test_icon_parity.cpp
   test_elicitation.cpp
+  test_tasks.cpp
   test_roots.cpp
   test_resource_read_chunking.cpp
   test_resource_read_chunking_capability_absence.cpp

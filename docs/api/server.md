@@ -272,9 +272,16 @@ Notes:
 
 ## Resources
 - void RegisterResource(const std::string& uri, ResourceHandler handler)
+- void RegisterResource(const Resource& resource, ResourceHandler handler)
 - void UnregisterResource(const std::string& uri)
 - std::vector<Resource> ListResources()
 - std::future<JSONValue> ReadResource(const std::string& uri)
+
+Notes:
+
+- Use the `Resource` overload when you want list metadata such as `title`, `annotations`, `_meta`, `size`, or `icons`
+  to round-trip through `resources/list`.
+- The string-only overload remains available and synthesizes default metadata from the URI for compatibility.
 
 ## Resource read chunking (experimental)
 
@@ -337,9 +344,15 @@ Tests:
 
 ## Prompts
 - void RegisterPrompt(const std::string& name, PromptHandler handler)
+- void RegisterPrompt(const Prompt& prompt, PromptHandler handler)
 - void UnregisterPrompt(const std::string& name)
 - std::vector<Prompt> ListPrompts()
 - std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments)
+
+Notes:
+
+- Use the `Prompt` overload when you want `title`, `arguments`, `_meta`, or `icons` preserved in `prompts/list`.
+- The string-only overload remains available and synthesizes the historical `Prompt: <name>` description.
 
 - void SetSamplingHandler(SamplingHandler handler)
   - Register a server-side handler for `sampling/createMessage`.

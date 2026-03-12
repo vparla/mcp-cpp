@@ -39,6 +39,23 @@ struct Implementation {
         : name(std::move(name)), version(std::move(version)) {}
 };
 
+struct Icon {
+    std::string src;
+    std::optional<std::string> mimeType;
+    std::optional<std::vector<std::string>> sizes;
+    std::optional<std::string> theme;
+
+    Icon() = default;
+    explicit Icon(std::string srcValue,
+                  std::optional<std::string> mimeTypeValue = std::nullopt,
+                  std::optional<std::vector<std::string>> sizesValue = std::nullopt,
+                  std::optional<std::string> themeValue = std::nullopt)
+        : src(std::move(srcValue)),
+          mimeType(std::move(mimeTypeValue)),
+          sizes(std::move(sizesValue)),
+          theme(std::move(themeValue)) {}
+};
+
 // (paged list results defined after item types)
 
 ///////////////////////////////////////// Capabilities ///////////////////////////////////////////
@@ -72,6 +89,27 @@ struct ElicitationCapability {
     std::vector<std::string> modes;
 };
 
+struct ServerTaskRequestCapabilities {
+    bool toolCall = false;
+};
+
+struct ClientTaskRequestCapabilities {
+    bool createMessage = false;
+    bool elicitationCreate = false;
+};
+
+struct ServerTasksCapability {
+    bool list = false;
+    bool cancel = false;
+    ServerTaskRequestCapabilities requests;
+};
+
+struct ClientTasksCapability {
+    bool list = false;
+    bool cancel = false;
+    ClientTaskRequestCapabilities requests;
+};
+
 struct LoggingCapability {
     // Empty for now - presence indicates logging notifications are supported
 };
@@ -82,6 +120,7 @@ struct ServerCapabilities {
     std::optional<PromptsCapability> prompts;
     std::optional<SamplingCapability> sampling;
     std::optional<CompletionsCapability> completions;
+    std::optional<ServerTasksCapability> tasks;
     std::optional<LoggingCapability> logging;
     std::unordered_map<std::string, JSONValue> experimental;
 };
@@ -90,6 +129,7 @@ struct ClientCapabilities {
     std::optional<RootsCapability> roots;
     std::optional<SamplingCapability> sampling;
     std::optional<ElicitationCapability> elicitation;
+    std::optional<ClientTasksCapability> tasks;
     std::unordered_map<std::string, JSONValue> experimental;
     // Optional negotiated extensions per SEP-1724 (e.g., io.modelcontextprotocol/ui)
     std::unordered_map<std::string, JSONValue> extensions;
@@ -99,7 +139,9 @@ struct ClientCapabilities {
 // Tool structures
 struct Tool {
     std::string name;
+    std::optional<std::string> title;
     std::string description;
+    std::optional<std::vector<Icon>> icons;
     JSONValue inputSchema;  // JSON Schema for tool parameters
     std::optional<JSONValue> outputSchema;
     std::optional<JSONValue> annotations;
@@ -111,8 +153,13 @@ struct Tool {
          std::optional<JSONValue> metaValue = std::nullopt,
          std::optional<JSONValue> outputSchemaValue = std::nullopt,
          std::optional<JSONValue> annotationsValue = std::nullopt,
-         std::optional<JSONValue> executionValue = std::nullopt)
-        : name(std::move(name)), description(std::move(description)),
+         std::optional<JSONValue> executionValue = std::nullopt,
+         std::optional<std::string> titleValue = std::nullopt,
+         std::optional<std::vector<Icon>> iconsValue = std::nullopt)
+        : name(std::move(name)),
+          title(std::move(titleValue)),
+          description(std::move(description)),
+          icons(std::move(iconsValue)),
           inputSchema(std::move(inputSchema)), outputSchema(std::move(outputSchemaValue)),
           annotations(std::move(annotationsValue)), execution(std::move(executionValue)),
           meta(std::move(metaValue)) {}
@@ -121,6 +168,25 @@ struct Tool {
 struct CallToolParams {
     std::string name;
     JSONValue arguments;
+};
+
+struct TaskMetadata {
+    std::optional<int64_t> ttl;
+};
+
+struct Task {
+    std::string taskId;
+    std::string status;
+    std::optional<std::string> statusMessage;
+    std::string createdAt;
+    std::string lastUpdatedAt;
+    std::optional<int64_t> ttl;
+    std::optional<int64_t> pollInterval;
+};
+
+struct CreateTaskResult {
+    Task task;
+    std::optional<JSONValue> meta;  // serialized as _meta in task creation responses
 };
 
 struct CallToolResult {
@@ -153,29 +219,60 @@ struct CompletionResult {
 struct Resource {
     std::string uri;
     std::string name;
+    std::optional<std::string> title;
     std::optional<std::string> description;
     std::optional<std::string> mimeType;
+    std::optional<int64_t> size;
+    std::optional<JSONValue> annotations;
+    std::optional<JSONValue> meta; // serialized as _meta in resources/list
+    std::optional<std::vector<Icon>> icons;
     
     Resource() = default;
     Resource(std::string uri, std::string name, 
              std::optional<std::string> description = std::nullopt,
-             std::optional<std::string> mimeType = std::nullopt)
-        : uri(std::move(uri)), name(std::move(name)), 
-          description(std::move(description)), mimeType(std::move(mimeType)) {}
+             std::optional<std::string> mimeType = std::nullopt,
+             std::optional<std::string> titleValue = std::nullopt,
+             std::optional<int64_t> sizeValue = std::nullopt,
+             std::optional<JSONValue> annotationsValue = std::nullopt,
+             std::optional<JSONValue> metaValue = std::nullopt,
+             std::optional<std::vector<Icon>> iconsValue = std::nullopt)
+        : uri(std::move(uri)),
+          name(std::move(name)),
+          title(std::move(titleValue)),
+          description(std::move(description)),
+          mimeType(std::move(mimeType)),
+          size(std::move(sizeValue)),
+          annotations(std::move(annotationsValue)),
+          meta(std::move(metaValue)),
+          icons(std::move(iconsValue)) {}
 };
 
 struct ResourceTemplate {
     std::string uriTemplate;
     std::string name;
+    std::optional<std::string> title;
     std::optional<std::string> description;
     std::optional<std::string> mimeType;
+    std::optional<JSONValue> annotations;
+    std::optional<JSONValue> meta; // serialized as _meta in resources/templates/list
+    std::optional<std::vector<Icon>> icons;
     
     ResourceTemplate() = default;
     ResourceTemplate(std::string uriTemplate, std::string name,
                      std::optional<std::string> description = std::nullopt,
-                     std::optional<std::string> mimeType = std::nullopt)
-        : uriTemplate(std::move(uriTemplate)), name(std::move(name)),
-          description(std::move(description)), mimeType(std::move(mimeType)) {}
+                     std::optional<std::string> mimeType = std::nullopt,
+                     std::optional<std::string> titleValue = std::nullopt,
+                     std::optional<JSONValue> annotationsValue = std::nullopt,
+                     std::optional<JSONValue> metaValue = std::nullopt,
+                     std::optional<std::vector<Icon>> iconsValue = std::nullopt)
+        : uriTemplate(std::move(uriTemplate)),
+          name(std::move(name)),
+          title(std::move(titleValue)),
+          description(std::move(description)),
+          mimeType(std::move(mimeType)),
+          annotations(std::move(annotationsValue)),
+          meta(std::move(metaValue)),
+          icons(std::move(iconsValue)) {}
 };
 
 struct ReadResourceParams {
@@ -207,14 +304,24 @@ struct Root {
 // Prompt structures
 struct Prompt {
     std::string name;
+    std::optional<std::string> title;
     std::string description;
     std::optional<JSONValue> arguments;  // JSON Schema for prompt arguments
+    std::optional<JSONValue> meta;       // serialized as _meta in prompts/list
+    std::optional<std::vector<Icon>> icons;
     
     Prompt() = default;
     Prompt(std::string name, std::string description, 
-           std::optional<JSONValue> arguments = std::nullopt)
-        : name(std::move(name)), description(std::move(description)), 
-          arguments(std::move(arguments)) {}
+           std::optional<JSONValue> arguments = std::nullopt,
+           std::optional<std::string> titleValue = std::nullopt,
+           std::optional<JSONValue> metaValue = std::nullopt,
+           std::optional<std::vector<Icon>> iconsValue = std::nullopt)
+        : name(std::move(name)),
+          title(std::move(titleValue)),
+          description(std::move(description)),
+          arguments(std::move(arguments)),
+          meta(std::move(metaValue)),
+          icons(std::move(iconsValue)) {}
 };
 
 struct GetPromptParams {
@@ -251,6 +358,11 @@ struct PromptsListResult {
 
 struct RootsListResult {
     std::vector<Root> roots;
+};
+
+struct TasksListResult {
+    std::vector<Task> tasks;
+    std::optional<std::string> nextCursor;
 };
 
 ///////////////////////////////////////// Sampling ///////////////////////////////////////////
@@ -316,6 +428,10 @@ struct RootListChangedParams {
     // Empty - just signals that root list changed
 };
 
+struct TaskStatusNotificationParams {
+    Task task;
+};
+
 ///////////////////////////////////////// Method names ///////////////////////////////////////////
 // MCP method names
 namespace Methods {
@@ -325,6 +441,10 @@ namespace Methods {
     constexpr const char* ListTools = "tools/list";
     constexpr const char* CallTool = "tools/call";
     constexpr const char* Complete = "completion/complete";
+    constexpr const char* GetTask = "tasks/get";
+    constexpr const char* ListTasks = "tasks/list";
+    constexpr const char* GetTaskResult = "tasks/result";
+    constexpr const char* CancelTask = "tasks/cancel";
     constexpr const char* ListResources = "resources/list";
     constexpr const char* ReadResource = "resources/read";
     constexpr const char* Subscribe = "resources/subscribe";
@@ -349,6 +469,7 @@ namespace Methods {
     constexpr const char* PromptListChanged = "notifications/prompts/list_changed";
     constexpr const char* RootListChanged = "notifications/roots/list_changed";
     constexpr const char* ElicitationComplete = "notifications/elicitation/complete";
+    constexpr const char* TaskStatus = "notifications/tasks/status";
     constexpr const char* Cancelled = "notifications/cancelled";
 }
 

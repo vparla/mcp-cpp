@@ -109,6 +109,62 @@ public:
     //==========================================================================================================
     virtual std::future<JSONValue> CallTool(const std::string& name, 
                                            const JSONValue& arguments) = 0;
+    //==========================================================================================================
+    // Invokes a server tool using task augmentation and returns the created task metadata.
+    // Args:
+    //   name: The tool name.
+    //   arguments: JSON object containing the tool parameters.
+    //   task: Optional task retention metadata.
+    // Returns:
+    //   A future with the created task information.
+    //==========================================================================================================
+    virtual std::future<CreateTaskResult> CallToolTask(const std::string& name,
+                                                       const JSONValue& arguments,
+                                                       const TaskMetadata& task) = 0;
+
+    ////////////////////////////////////////// Task operations /////////////////////////////////////////////////
+    //==========================================================================================================
+    // Retrieves the latest task state for the given task id.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   A future with the current task metadata.
+    //==========================================================================================================
+    virtual std::future<Task> GetTask(const std::string& taskId) = 0;
+    //==========================================================================================================
+    // Lists receiver-side tasks (non-paged helper).
+    // Args:
+    //   (none)
+    // Returns:
+    //   A future with all currently known tasks.
+    //==========================================================================================================
+    virtual std::future<std::vector<Task>> ListTasks() = 0;
+    //==========================================================================================================
+    // Lists receiver-side tasks with optional paging.
+    // Args:
+    //   cursor: Optional opaque cursor indicating the starting position.
+    //   limit: Optional maximum number of tasks to return; must be positive when provided.
+    // Returns:
+    //   A future with a task page and optional nextCursor.
+    //==========================================================================================================
+    virtual std::future<TasksListResult> ListTasksPaged(const std::optional<std::string>& cursor,
+                                                        const std::optional<int>& limit) = 0;
+    //==========================================================================================================
+    // Retrieves the original result payload for a terminal task.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   A future with either the original result payload or the original error payload.
+    //==========================================================================================================
+    virtual std::future<JSONValue> GetTaskResult(const std::string& taskId) = 0;
+    //==========================================================================================================
+    // Requests cancellation for a receiver-side task.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   A future with the updated task metadata.
+    //==========================================================================================================
+    virtual std::future<Task> CancelTask(const std::string& taskId) = 0;
 
     ////////////////////////////////////////// Resource operations /////////////////////////////////////////////
     //==========================================================================================================
@@ -343,6 +399,17 @@ public:
     using ProgressHandler = std::function<void(const std::string& token, double progress, const std::string& message)>;
     virtual void SetProgressHandler(ProgressHandler handler) = 0;
 
+    ////////////////////////////////////////// Task status tracking ////////////////////////////////////////////
+    //==========================================================================================================
+    // Registers a task status notification handler.
+    // Args:
+    //   handler: Callback receiving the latest task snapshot from notifications/tasks/status.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    using TaskStatusHandler = std::function<void(const Task&)>;
+    virtual void SetTaskStatusHandler(TaskStatusHandler handler) = 0;
+
     //////////////////////////////////////////// Error handling ////////////////////////////////////////////////
     //==========================================================================================================
     // Registers an error handler to receive transport/client errors.
@@ -407,6 +474,15 @@ public:
                                                const std::optional<int>& limit) override;
     std::future<JSONValue> CallTool(const std::string& name, 
                                    const JSONValue& arguments) override;
+    std::future<CreateTaskResult> CallToolTask(const std::string& name,
+                                               const JSONValue& arguments,
+                                               const TaskMetadata& task) override;
+    std::future<Task> GetTask(const std::string& taskId) override;
+    std::future<std::vector<Task>> ListTasks() override;
+    std::future<TasksListResult> ListTasksPaged(const std::optional<std::string>& cursor,
+                                                const std::optional<int>& limit) override;
+    std::future<JSONValue> GetTaskResult(const std::string& taskId) override;
+    std::future<Task> CancelTask(const std::string& taskId) override;
 
     std::future<std::vector<Resource>> ListResources() override;
     std::future<ResourcesListResult> ListResourcesPaged(const std::optional<std::string>& cursor,
@@ -441,6 +517,7 @@ public:
     void SetNotificationHandler(const std::string& method, NotificationHandler handler) override;
     void RemoveNotificationHandler(const std::string& method) override;
     void SetProgressHandler(ProgressHandler handler) override;
+    void SetTaskStatusHandler(TaskStatusHandler handler) override;
     void SetErrorHandler(ErrorHandler handler) override;
 
     // Validation (opt-in)

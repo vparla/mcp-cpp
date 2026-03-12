@@ -47,9 +47,10 @@ TEST(ValidationLists, ToolsList_InvalidShape_Throws) {
         }
         if (req.method == Methods::ListTools) {
             JSONValue::Object resultObj;
-            // Invalid: tool item missing required 'description'
+            // Invalid: tool item missing required 'name'
             JSONValue::Array tools;
-            JSONValue::Object t; t["name"] = std::make_shared<JSONValue>(std::string("t1"));
+            JSONValue::Object t;
+            t["description"] = std::make_shared<JSONValue>(std::string("tool without name"));
             tools.push_back(std::make_shared<JSONValue>(t));
             resultObj["tools"] = std::make_shared<JSONValue>(tools);
             auto resp = std::make_unique<JSONRPCResponse>();
@@ -154,8 +155,9 @@ TEST(ValidationLists, PromptsList_InvalidShape_Throws) {
         if (req.method == Methods::ListPrompts) {
             JSONValue::Object resultObj;
             JSONValue::Array arr;
-            // Invalid: prompt item missing required 'description'
-            JSONValue::Object p; p["name"] = std::make_shared<JSONValue>(std::string("p1"));
+            // Invalid: prompt item missing required 'name'
+            JSONValue::Object p;
+            p["description"] = std::make_shared<JSONValue>(std::string("prompt without name"));
             arr.push_back(std::make_shared<JSONValue>(p));
             resultObj["prompts"] = std::make_shared<JSONValue>(arr);
             auto resp = std::make_unique<JSONRPCResponse>();

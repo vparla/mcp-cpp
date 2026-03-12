@@ -21,9 +21,160 @@
 #include "mcp/errors/Errors.h"
 #include "mcp/validation/Validation.h"
 #include "mcp/validation/Validators.h"
+#include "src/mcp/MetadataSupport.h"
+#include "src/mcp/TaskSupport.h"
 
 
 namespace mcp {
+namespace {
+
+void PopulateToolFromListItem(const JSONValue::Object& item, Tool& tool) {
+    auto nameIt = item.find("name");
+    if (nameIt != item.end() && nameIt->second &&
+        std::holds_alternative<std::string>(nameIt->second->value)) {
+        tool.name = std::get<std::string>(nameIt->second->value);
+    }
+    auto titleIt = item.find("title");
+    if (titleIt != item.end() && titleIt->second &&
+        std::holds_alternative<std::string>(titleIt->second->value)) {
+        tool.title = std::get<std::string>(titleIt->second->value);
+    }
+    auto descIt = item.find("description");
+    if (descIt != item.end() && descIt->second &&
+        std::holds_alternative<std::string>(descIt->second->value)) {
+        tool.description = std::get<std::string>(descIt->second->value);
+    }
+    tool.icons = metadata::ParseIconsField(item, "icons");
+    auto schemaIt = item.find("inputSchema");
+    if (schemaIt != item.end() && schemaIt->second) {
+        tool.inputSchema = *schemaIt->second;
+    }
+    auto outputSchemaIt = item.find("outputSchema");
+    if (outputSchemaIt != item.end() && outputSchemaIt->second) {
+        tool.outputSchema = *outputSchemaIt->second;
+    }
+    auto annotationsIt = item.find("annotations");
+    if (annotationsIt != item.end() && annotationsIt->second) {
+        tool.annotations = *annotationsIt->second;
+    }
+    auto executionIt = item.find("execution");
+    if (executionIt != item.end() && executionIt->second) {
+        tool.execution = *executionIt->second;
+    }
+    auto metaIt = item.find("_meta");
+    if (metaIt != item.end() && metaIt->second) {
+        tool.meta = *metaIt->second;
+    }
+}
+
+void PopulateResourceFromListItem(const JSONValue::Object& item, Resource& resource) {
+    auto uriIt = item.find("uri");
+    if (uriIt != item.end() && uriIt->second &&
+        std::holds_alternative<std::string>(uriIt->second->value)) {
+        resource.uri = std::get<std::string>(uriIt->second->value);
+    }
+    auto nameIt = item.find("name");
+    if (nameIt != item.end() && nameIt->second &&
+        std::holds_alternative<std::string>(nameIt->second->value)) {
+        resource.name = std::get<std::string>(nameIt->second->value);
+    }
+    auto titleIt = item.find("title");
+    if (titleIt != item.end() && titleIt->second &&
+        std::holds_alternative<std::string>(titleIt->second->value)) {
+        resource.title = std::get<std::string>(titleIt->second->value);
+    }
+    auto descIt = item.find("description");
+    if (descIt != item.end() && descIt->second &&
+        std::holds_alternative<std::string>(descIt->second->value)) {
+        resource.description = std::get<std::string>(descIt->second->value);
+    }
+    auto mimeIt = item.find("mimeType");
+    if (mimeIt != item.end() && mimeIt->second &&
+        std::holds_alternative<std::string>(mimeIt->second->value)) {
+        resource.mimeType = std::get<std::string>(mimeIt->second->value);
+    }
+    auto sizeIt = item.find("size");
+    if (sizeIt != item.end() && sizeIt->second &&
+        std::holds_alternative<int64_t>(sizeIt->second->value)) {
+        resource.size = std::get<int64_t>(sizeIt->second->value);
+    }
+    auto annotationsIt = item.find("annotations");
+    if (annotationsIt != item.end() && annotationsIt->second) {
+        resource.annotations = *annotationsIt->second;
+    }
+    auto metaIt = item.find("_meta");
+    if (metaIt != item.end() && metaIt->second) {
+        resource.meta = *metaIt->second;
+    }
+    resource.icons = metadata::ParseIconsField(item, "icons");
+}
+
+void PopulateResourceTemplateFromListItem(const JSONValue::Object& item,
+                                          ResourceTemplate& resourceTemplate) {
+    auto templateIt = item.find("uriTemplate");
+    if (templateIt != item.end() && templateIt->second &&
+        std::holds_alternative<std::string>(templateIt->second->value)) {
+        resourceTemplate.uriTemplate = std::get<std::string>(templateIt->second->value);
+    }
+    auto nameIt = item.find("name");
+    if (nameIt != item.end() && nameIt->second &&
+        std::holds_alternative<std::string>(nameIt->second->value)) {
+        resourceTemplate.name = std::get<std::string>(nameIt->second->value);
+    }
+    auto titleIt = item.find("title");
+    if (titleIt != item.end() && titleIt->second &&
+        std::holds_alternative<std::string>(titleIt->second->value)) {
+        resourceTemplate.title = std::get<std::string>(titleIt->second->value);
+    }
+    auto descIt = item.find("description");
+    if (descIt != item.end() && descIt->second &&
+        std::holds_alternative<std::string>(descIt->second->value)) {
+        resourceTemplate.description = std::get<std::string>(descIt->second->value);
+    }
+    auto mimeIt = item.find("mimeType");
+    if (mimeIt != item.end() && mimeIt->second &&
+        std::holds_alternative<std::string>(mimeIt->second->value)) {
+        resourceTemplate.mimeType = std::get<std::string>(mimeIt->second->value);
+    }
+    auto annotationsIt = item.find("annotations");
+    if (annotationsIt != item.end() && annotationsIt->second) {
+        resourceTemplate.annotations = *annotationsIt->second;
+    }
+    auto metaIt = item.find("_meta");
+    if (metaIt != item.end() && metaIt->second) {
+        resourceTemplate.meta = *metaIt->second;
+    }
+    resourceTemplate.icons = metadata::ParseIconsField(item, "icons");
+}
+
+void PopulatePromptFromListItem(const JSONValue::Object& item, Prompt& prompt) {
+    auto nameIt = item.find("name");
+    if (nameIt != item.end() && nameIt->second &&
+        std::holds_alternative<std::string>(nameIt->second->value)) {
+        prompt.name = std::get<std::string>(nameIt->second->value);
+    }
+    auto titleIt = item.find("title");
+    if (titleIt != item.end() && titleIt->second &&
+        std::holds_alternative<std::string>(titleIt->second->value)) {
+        prompt.title = std::get<std::string>(titleIt->second->value);
+    }
+    auto descIt = item.find("description");
+    if (descIt != item.end() && descIt->second &&
+        std::holds_alternative<std::string>(descIt->second->value)) {
+        prompt.description = std::get<std::string>(descIt->second->value);
+    }
+    auto argsIt = item.find("arguments");
+    if (argsIt != item.end() && argsIt->second) {
+        prompt.arguments = *argsIt->second;
+    }
+    auto metaIt = item.find("_meta");
+    if (metaIt != item.end() && metaIt->second) {
+        prompt.meta = *metaIt->second;
+    }
+    prompt.icons = metadata::ParseIconsField(item, "icons");
+}
+
+}  // namespace
 
 // Client implementation
 class Client::Impl {
@@ -36,6 +187,7 @@ private:
     std::atomic<bool> connected{false};
     std::unordered_map<std::string, IClient::NotificationHandler> notificationHandlers;
     IClient::ProgressHandler progressHandler;
+    IClient::TaskStatusHandler taskStatusHandler;
     IClient::ErrorHandler errorHandler;
     IClient::RootsListHandler rootsListHandler;
     IClient::SamplingHandler samplingHandler;
@@ -56,6 +208,10 @@ private:
     std::mutex cancelMutex;
     std::unordered_map<std::string, std::shared_ptr<CancellationToken>> cancelMap;
     std::unordered_map<std::string, std::vector<std::shared_ptr<std::stop_source>>> stopSources;
+    tasks::TaskStore receivedTasks;
+    tasks::BackgroundTaskGroup taskWorkers;
+    std::mutex outboundTasksMutex;
+    std::unordered_map<std::string, tasks::TaskKind> outboundTaskKinds;
 
     static std::string idToString(const JSONRPCId& id) {
         std::string idStr;
@@ -157,6 +313,9 @@ private:
         // Set default client capabilities
         capabilities.experimental = {};
         capabilities.sampling = {};
+        receivedTasks.SetStatusCallback([this](const Task& task) {
+            this->sendTaskStatusNotification(task);
+        });
     }
     // coroutine helpers moved to anonymous namespace below
     // paged list methods are defined after their non-paged counterparts
@@ -186,6 +345,31 @@ private:
                 elicitationObj["modes"] = std::make_shared<JSONValue>(modes);
             }
             obj["elicitation"] = std::make_shared<JSONValue>(elicitationObj);
+        }
+
+        if (caps.tasks.has_value()) {
+            JSONValue::Object tasksObj;
+            if (caps.tasks->list) {
+                tasksObj["list"] = std::make_shared<JSONValue>(JSONValue::Object{});
+            }
+            if (caps.tasks->cancel) {
+                tasksObj["cancel"] = std::make_shared<JSONValue>(JSONValue::Object{});
+            }
+            JSONValue::Object requestsObj;
+            if (caps.tasks->requests.createMessage) {
+                JSONValue::Object samplingObj;
+                samplingObj["createMessage"] = std::make_shared<JSONValue>(JSONValue::Object{});
+                requestsObj["sampling"] = std::make_shared<JSONValue>(samplingObj);
+            }
+            if (caps.tasks->requests.elicitationCreate) {
+                JSONValue::Object elicitationReqObj;
+                elicitationReqObj["create"] = std::make_shared<JSONValue>(JSONValue::Object{});
+                requestsObj["elicitation"] = std::make_shared<JSONValue>(elicitationReqObj);
+            }
+            if (!requestsObj.empty()) {
+                tasksObj["requests"] = std::make_shared<JSONValue>(requestsObj);
+            }
+            obj["tasks"] = std::make_shared<JSONValue>(tasksObj);
         }
 
         if (caps.roots.has_value()) {
@@ -242,6 +426,27 @@ private:
                 if (completionsIt != capsObj.end()) {
                     serverCapabilities.completions = CompletionsCapability{};
                 }
+
+                auto tasksIt = capsObj.find("tasks");
+                if (tasksIt != capsObj.end() && tasksIt->second &&
+                    std::holds_alternative<JSONValue::Object>(tasksIt->second->value)) {
+                    ServerTasksCapability taskCaps{};
+                    const auto& tasksObj = std::get<JSONValue::Object>(tasksIt->second->value);
+                    taskCaps.list = tasksObj.find("list") != tasksObj.end();
+                    taskCaps.cancel = tasksObj.find("cancel") != tasksObj.end();
+                    auto requestsIt = tasksObj.find("requests");
+                    if (requestsIt != tasksObj.end() && requestsIt->second &&
+                        std::holds_alternative<JSONValue::Object>(requestsIt->second->value)) {
+                        const auto& requestsObj = std::get<JSONValue::Object>(requestsIt->second->value);
+                        auto toolsIt = requestsObj.find("tools");
+                        if (toolsIt != requestsObj.end() && toolsIt->second &&
+                            std::holds_alternative<JSONValue::Object>(toolsIt->second->value)) {
+                            const auto& toolsObj = std::get<JSONValue::Object>(toolsIt->second->value);
+                            taskCaps.requests.toolCall = toolsObj.find("call") != toolsObj.end();
+                        }
+                    }
+                    serverCapabilities.tasks = taskCaps;
+                }
                 
                 // Parse logging capability
                 auto loggingIt = capsObj.find("logging");
@@ -257,6 +462,15 @@ private:
     mcp::async::Task<ServerCapabilities> coInitialize(const Implementation& clientInfo,
                                                      const ClientCapabilities& capabilities);
     mcp::async::Task<JSONValue> coCallTool(const std::string& name, const JSONValue& arguments);
+    mcp::async::Task<CreateTaskResult> coCallToolTask(const std::string& name,
+                                                      const JSONValue& arguments,
+                                                      const TaskMetadata& task);
+    mcp::async::Task<Task> coGetTask(const std::string& taskId);
+    mcp::async::Task<std::vector<Task>> coListTasks();
+    mcp::async::Task<TasksListResult> coListTasksPaged(const std::optional<std::string>& cursor,
+                                                       const std::optional<int>& limit);
+    mcp::async::Task<JSONValue> coGetTaskResult(const std::string& taskId);
+    mcp::async::Task<Task> coCancelTask(const std::string& taskId);
     mcp::async::Task<CompletionResult> coComplete(const CompleteParams& params);
     mcp::async::Task<void> coPing();
     mcp::async::Task<void> coSubscribeResources(const std::optional<std::string>& uri);
@@ -285,6 +499,10 @@ private:
     void handleProgressNotification(const JSONValue::Object& o);
     void invalidateCachesForListChanged(const std::string& method);
     std::unique_ptr<JSONRPCResponse> onRequest(const JSONRPCRequest& req);
+    void sendTaskStatusNotification(const Task& task);
+    void rememberOutboundTask(const std::string& taskId, tasks::TaskKind kind);
+    std::optional<tasks::TaskKind> outboundTaskKindFor(const std::string& taskId);
+    static std::string errorMessageFromPayload(const JSONValue& payload);
     void logInvalidCreateMessageParamsContext(const JSONValue& paramsVal);
     void logInvalidCreateMessageResultContext(const JSONValue& result);
 };
@@ -331,6 +549,49 @@ void Client::Impl::invalidateCachesForListChanged(const std::string& method) {
     }
 }
 
+void Client::Impl::sendTaskStatusNotification(const Task& task) {
+    if (!this->transport || !this->transport->IsConnected()) {
+        return;
+    }
+    try {
+        auto notification = std::make_unique<JSONRPCNotification>();
+        notification->method = Methods::TaskStatus;
+        notification->params = tasks::SerializeTask(task);
+        (void)this->transport->SendNotification(std::move(notification));
+    } catch (const std::exception& e) {
+        LOG_ERROR("Task status notification exception: {}", e.what());
+    }
+}
+
+void Client::Impl::rememberOutboundTask(const std::string& taskId, tasks::TaskKind kind) {
+    if (taskId.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(this->outboundTasksMutex);
+    this->outboundTaskKinds[taskId] = kind;
+}
+
+std::optional<tasks::TaskKind> Client::Impl::outboundTaskKindFor(const std::string& taskId) {
+    std::lock_guard<std::mutex> lk(this->outboundTasksMutex);
+    auto it = this->outboundTaskKinds.find(taskId);
+    if (it == this->outboundTaskKinds.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+std::string Client::Impl::errorMessageFromPayload(const JSONValue& payload) {
+    if (!std::holds_alternative<JSONValue::Object>(payload.value)) {
+        return "request failed";
+    }
+    const auto& obj = std::get<JSONValue::Object>(payload.value);
+    auto it = obj.find("message");
+    if (it != obj.end() && it->second && std::holds_alternative<std::string>(it->second->value)) {
+        return std::get<std::string>(it->second->value);
+    }
+    return "request failed";
+}
+
 void Client::Impl::onNotification(std::unique_ptr<JSONRPCNotification> n) {
     if (!n) { return; }
     try {
@@ -347,6 +608,13 @@ void Client::Impl::onNotification(std::unique_ptr<JSONRPCNotification> n) {
                     this->cancelById(idStr);
                 }
             }
+        } else if (n->method == Methods::TaskStatus && this->taskStatusHandler && n->params.has_value()) {
+            if (this->validationMode == validation::ValidationMode::Strict &&
+                !validation::validateTaskStatusNotificationParamsJson(n->params.value())) {
+                LOG_WARN("Dropping invalid task status notification under Strict mode");
+                return;
+            }
+            this->taskStatusHandler(tasks::ParseTask(n->params.value()));
         } else {
             this->invalidateCachesForListChanged(n->method);
             auto it = this->notificationHandlers.find(n->method);
@@ -435,6 +703,133 @@ std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& r
             resp->id = req.id;
             resp->result = result;
             return resp;
+        } else if (req.method == Methods::GetTask) {
+            if (!this->capabilities.tasks.has_value()) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Tasks not supported";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            std::string taskId;
+            if (!tasks::TryParseTaskId(req.params, taskId)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid taskId";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto task = this->receivedTasks.GetTask(taskId);
+            if (!task.has_value()) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Unknown task";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            JSONValue result = tasks::SerializeTask(task.value());
+            if (this->validationMode == validation::ValidationMode::Strict &&
+                !validation::validateTaskJson(result)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid task result shape";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = result;
+            return resp;
+        } else if (req.method == Methods::ListTasks) {
+            if (!this->capabilities.tasks.has_value() || !this->capabilities.tasks->list) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Task listing not supported";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            size_t start = 0;
+            std::optional<size_t> limitOpt;
+            if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+                const auto& obj = std::get<JSONValue::Object>(req.params->value);
+                auto cursorIt = obj.find("cursor");
+                if (cursorIt != obj.end() && cursorIt->second) {
+                    if (!std::holds_alternative<std::string>(cursorIt->second->value)) {
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid cursor";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                    try {
+                        start = static_cast<size_t>(std::stoll(std::get<std::string>(cursorIt->second->value)));
+                    } catch (...) {
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid cursor";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                }
+                auto limitIt = obj.find("limit");
+                if (limitIt != obj.end() && limitIt->second) {
+                    if (!std::holds_alternative<int64_t>(limitIt->second->value) ||
+                        std::get<int64_t>(limitIt->second->value) <= 0) {
+                        errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid limit";
+                        return errors::makeErrorResponse(req.id, e);
+                    }
+                    limitOpt = static_cast<size_t>(std::get<int64_t>(limitIt->second->value));
+                }
+            }
+            JSONValue result = tasks::SerializeTasksListResult(this->receivedTasks.ListTasks(start, limitOpt));
+            if (this->validationMode == validation::ValidationMode::Strict &&
+                !validation::validateTasksListResultJson(result)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid tasks/list result shape";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = result;
+            return resp;
+        } else if (req.method == Methods::GetTaskResult) {
+            if (!this->capabilities.tasks.has_value()) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Tasks not supported";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            std::string taskId;
+            if (!tasks::TryParseTaskId(req.params, taskId)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid taskId";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto kind = this->receivedTasks.GetKind(taskId);
+            auto payload = this->receivedTasks.WaitForTerminalPayload(taskId);
+            if (!payload.has_value()) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Unknown task";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            if (payload->first) {
+                resp->error = tasks::AttachRelatedTaskMetaToError(payload->second, taskId);
+                return resp;
+            }
+            JSONValue result = tasks::AttachRelatedTaskMetaToResult(payload->second, taskId);
+            if (this->validationMode == validation::ValidationMode::Strict && kind.has_value()) {
+                const bool valid =
+                    (*kind == tasks::TaskKind::CreateMessage && validation::validateCreateMessageResultJson(result)) ||
+                    (*kind == tasks::TaskKind::Elicitation && validation::validateElicitationResultJson(result));
+                if (!valid) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid task result shape";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+            }
+            resp->result = result;
+            return resp;
+        } else if (req.method == Methods::CancelTask) {
+            if (!this->capabilities.tasks.has_value() || !this->capabilities.tasks->cancel) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Task cancellation not supported";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            std::string taskId;
+            if (!tasks::TryParseTaskId(req.params, taskId)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid taskId";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            const JSONValue errorPayload = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Cancelled");
+            Task cancelledTask;
+            if (!this->receivedTasks.CancelTask(taskId, errorPayload, &cancelledTask)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Task is not cancellable";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            JSONValue result = tasks::SerializeTask(cancelledTask);
+            if (this->validationMode == validation::ValidationMode::Strict &&
+                !validation::validateTaskJson(result)) {
+                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid task result shape";
+                return errors::makeErrorResponse(req.id, e);
+            }
+            auto resp = std::make_unique<JSONRPCResponse>();
+            resp->id = req.id;
+            resp->result = result;
+            return resp;
         } else if (req.method == Methods::Elicit) {
             if (!this->elicitationHandler) {
                 errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No elicitation handler registered";
@@ -482,6 +877,56 @@ std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& r
                 }
             }
 
+            TaskMetadata taskMetadata;
+            const bool isTaskRequest = tasks::TryParseTaskMetadata(req.params, taskMetadata);
+            if (isTaskRequest) {
+                if (!this->capabilities.tasks.has_value() || !this->capabilities.tasks->requests.elicitationCreate) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Task-augmented elicitation not supported";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                CreateTaskResult created;
+                created.task = this->receivedTasks.CreateTask(tasks::TaskKind::Elicitation, taskMetadata);
+                const std::string taskId = created.task.taskId;
+                this->taskWorkers.Add(std::async(std::launch::async, [this, taskId, request]() {
+                    try {
+                        ElicitationResult resultValue = this->elicitationHandler(request).get();
+                        JSONValue::Object resultObj;
+                        resultObj["action"] = std::make_shared<JSONValue>(resultValue.action);
+                        if (resultValue.content.has_value()) {
+                            resultObj["content"] = std::make_shared<JSONValue>(resultValue.content.value());
+                        }
+                        if (resultValue.elicitationId.has_value()) {
+                            resultObj["elicitationId"] = std::make_shared<JSONValue>(resultValue.elicitationId.value());
+                        }
+                        JSONValue result{resultObj};
+                        if (this->validationMode == validation::ValidationMode::Strict &&
+                            !validation::validateElicitationResultJson(result)) {
+                            const JSONValue errorPayload = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Invalid elicitation result shape");
+                            (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Failed,
+                                                                  std::string("Invalid elicitation result shape"),
+                                                                  true, errorPayload, nullptr);
+                            return;
+                        }
+                        (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Completed,
+                                                              std::nullopt, false, result, nullptr);
+                    } catch (const std::exception& e) {
+                        const JSONValue errorPayload = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what());
+                        (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Failed, std::string(e.what()),
+                                                              true, errorPayload, nullptr);
+                    }
+                }));
+                JSONValue result = tasks::SerializeCreateTaskResult(created);
+                if (this->validationMode == validation::ValidationMode::Strict &&
+                    !validation::validateCreateTaskResultJson(result)) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid task creation result shape";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                auto resp = std::make_unique<JSONRPCResponse>();
+                resp->id = req.id;
+                resp->result = result;
+                return resp;
+            }
+
             ElicitationResult resultValue = this->elicitationHandler(request).get();
             JSONValue::Object resultObj;
             resultObj["action"] = std::make_shared<JSONValue>(resultValue.action);
@@ -504,6 +949,72 @@ std::unique_ptr<JSONRPCResponse> Client::Impl::onRequest(const JSONRPCRequest& r
             resp->result = result;
             return resp;
         } else if (req.method == Methods::CreateMessage) {
+            TaskMetadata taskMetadata;
+            const bool isTaskRequest = tasks::TryParseTaskMetadata(req.params, taskMetadata);
+            if (isTaskRequest) {
+                if (!this->capabilities.tasks.has_value() || !this->capabilities.tasks->requests.createMessage) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "Task-augmented sampling not supported";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                if (!this->samplingHandler && !this->samplingHandlerCancelable) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::MethodNotAllowed; e.message = "No sampling handler registered";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                JSONValue paramsVal = req.params.value_or(JSONValue{JSONValue::Object{}});
+                if (this->validationMode == validation::ValidationMode::Strict &&
+                    !validation::validateCreateMessageParamsJson(paramsVal)) {
+                    this->logInvalidCreateMessageParamsContext(paramsVal);
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid sampling/createMessage params";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                JSONValue messages, modelPreferences, systemPrompt, includeContext;
+                if (req.params.has_value() && std::holds_alternative<JSONValue::Object>(req.params->value)) {
+                    const auto& o = std::get<JSONValue::Object>(req.params->value);
+                    auto it = o.find("messages"); if (it != o.end()) messages = *it->second;
+                    it = o.find("modelPreferences"); if (it != o.end()) modelPreferences = *it->second;
+                    it = o.find("systemPrompt"); if (it != o.end()) systemPrompt = *it->second;
+                    it = o.find("includeContext"); if (it != o.end()) includeContext = *it->second;
+                }
+                CreateTaskResult created;
+                created.task = this->receivedTasks.CreateTask(tasks::TaskKind::CreateMessage, taskMetadata);
+                const std::string taskId = created.task.taskId;
+                auto stopSource = this->receivedTasks.GetStopSource(taskId);
+                this->taskWorkers.Add(std::async(std::launch::async, [this, taskId, messages, modelPreferences, systemPrompt, includeContext, stopSource]() {
+                    try {
+                        std::future<JSONValue> future = this->samplingHandler
+                            ? this->samplingHandler(messages, modelPreferences, systemPrompt, includeContext)
+                            : this->samplingHandlerCancelable(messages, modelPreferences, systemPrompt, includeContext,
+                                                              stopSource ? stopSource->get_token() : std::stop_token{});
+                        JSONValue result = future.get();
+                        if (this->validationMode == validation::ValidationMode::Strict &&
+                            !validation::validateCreateMessageResultJson(result)) {
+                            this->logInvalidCreateMessageResultContext(result);
+                            const JSONValue errorPayload = CreateErrorObject(JSONRPCErrorCodes::InternalError, "Invalid sampling result shape");
+                            (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Failed,
+                                                                  std::string("Invalid sampling result shape"),
+                                                                  true, errorPayload, nullptr);
+                            return;
+                        }
+                        (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Completed,
+                                                              std::nullopt, false, result, nullptr);
+                    } catch (const std::exception& e) {
+                        const JSONValue errorPayload = CreateErrorObject(JSONRPCErrorCodes::InternalError, e.what());
+                        (void)this->receivedTasks.CompleteTask(taskId, tasks::Status::Failed, std::string(e.what()),
+                                                              true, errorPayload, nullptr);
+                    }
+                }));
+                JSONValue result = tasks::SerializeCreateTaskResult(created);
+                if (this->validationMode == validation::ValidationMode::Strict &&
+                    !validation::validateCreateTaskResultJson(result)) {
+                    errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid task creation result shape";
+                    return errors::makeErrorResponse(req.id, e);
+                }
+                auto resp = std::make_unique<JSONRPCResponse>();
+                resp->id = req.id;
+                resp->result = result;
+                return resp;
+            }
+
             // Register cancellation and stop_source for this request id
             const std::string idStr = Impl::idToString(req.id);
             auto token = this->registerCancelToken(idStr);
@@ -587,6 +1098,7 @@ mcp::async::Task<void> Client::Impl::coConnect(std::unique_ptr<ITransport> trans
 mcp::async::Task<void> Client::Impl::coDisconnect() {
     FUNC_SCOPE();
     if (!this->transport) {
+        this->taskWorkers.WaitAll();
         co_return;
     }
     auto fut = this->transport->Close();
@@ -595,6 +1107,7 @@ mcp::async::Task<void> Client::Impl::coDisconnect() {
     } catch (const std::exception& e) {
         LOG_ERROR("Disconnect exception: {}", e.what());
     }
+    this->taskWorkers.WaitAll();
     co_return;
 }
 mcp::async::Task<ServerCapabilities> Client::Impl::coInitialize(
@@ -713,6 +1226,149 @@ mcp::async::Task<void> Client::Impl::coPing() {
         throw;
     }
     co_return;
+}
+
+mcp::async::Task<CreateTaskResult> Client::Impl::coCallToolTask(const std::string& name,
+                                                                const JSONValue& arguments,
+                                                                const TaskMetadata& task) {
+    FUNC_SCOPE();
+    CreateTaskResult out;
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::CallTool;
+    JSONValue::Object paramsObj;
+    paramsObj["name"] = std::make_shared<JSONValue>(name);
+    paramsObj["arguments"] = std::make_shared<JSONValue>(arguments);
+    paramsObj["task"] = std::make_shared<JSONValue>(tasks::SerializeTaskMetadata(task));
+    request->params = JSONValue{paramsObj};
+    auto future = this->transport->SendRequest(std::move(request));
+    auto response = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    if (!response || response->IsError() || !response->result.has_value()) {
+        throw std::runtime_error(response && response->error.has_value()
+            ? errorMessageFromPayload(response->error.value())
+            : "tools/call task request failed");
+    }
+    if (this->validationMode == validation::ValidationMode::Strict &&
+        !validation::validateCreateTaskResultJson(response->result.value())) {
+        throw std::runtime_error("Validation failed: tools/call task result shape");
+    }
+    out = tasks::ParseCreateTaskResult(response->result.value());
+    this->rememberOutboundTask(out.task.taskId, tasks::TaskKind::ToolCall);
+    co_return out;
+}
+
+mcp::async::Task<Task> Client::Impl::coGetTask(const std::string& taskId) {
+    FUNC_SCOPE();
+    Task out;
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::GetTask;
+    JSONValue::Object paramsObj;
+    paramsObj["taskId"] = std::make_shared<JSONValue>(taskId);
+    request->params = JSONValue{paramsObj};
+    auto future = this->transport->SendRequest(std::move(request));
+    auto response = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    if (!response || response->IsError() || !response->result.has_value()) {
+        throw std::runtime_error(response && response->error.has_value()
+            ? errorMessageFromPayload(response->error.value())
+            : "tasks/get failed");
+    }
+    if (this->validationMode == validation::ValidationMode::Strict &&
+        !validation::validateTaskJson(response->result.value())) {
+        throw std::runtime_error("Validation failed: tasks/get result shape");
+    }
+    out = tasks::ParseTask(response->result.value());
+    co_return out;
+}
+
+mcp::async::Task<std::vector<Task>> Client::Impl::coListTasks() {
+    FUNC_SCOPE();
+    auto future = this->coListTasksPaged(std::nullopt, std::nullopt).toFuture();
+    auto page = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    co_return page.tasks;
+}
+
+mcp::async::Task<TasksListResult> Client::Impl::coListTasksPaged(const std::optional<std::string>& cursor,
+                                                                 const std::optional<int>& limit) {
+    FUNC_SCOPE();
+    TasksListResult out;
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::ListTasks;
+    JSONValue::Object paramsObj;
+    if (cursor.has_value()) {
+        paramsObj["cursor"] = std::make_shared<JSONValue>(cursor.value());
+    }
+    if (limit.has_value() && *limit > 0) {
+        paramsObj["limit"] = std::make_shared<JSONValue>(static_cast<int64_t>(*limit));
+    }
+    if (!paramsObj.empty()) {
+        request->params = JSONValue{paramsObj};
+    }
+    auto future = this->transport->SendRequest(std::move(request));
+    auto response = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    if (!response || response->IsError() || !response->result.has_value()) {
+        throw std::runtime_error(response && response->error.has_value()
+            ? errorMessageFromPayload(response->error.value())
+            : "tasks/list failed");
+    }
+    if (this->validationMode == validation::ValidationMode::Strict &&
+        !validation::validateTasksListResultJson(response->result.value())) {
+        throw std::runtime_error("Validation failed: tasks/list result shape");
+    }
+    out = tasks::ParseTasksListResult(response->result.value());
+    co_return out;
+}
+
+mcp::async::Task<JSONValue> Client::Impl::coGetTaskResult(const std::string& taskId) {
+    FUNC_SCOPE();
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::GetTaskResult;
+    JSONValue::Object paramsObj;
+    paramsObj["taskId"] = std::make_shared<JSONValue>(taskId);
+    request->params = JSONValue{paramsObj};
+    auto future = this->transport->SendRequest(std::move(request));
+    auto response = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    if (!response) {
+        co_return JSONValue{};
+    }
+    if (response->IsError()) {
+        co_return response->error.value_or(JSONValue{});
+    }
+    if (!response->result.has_value()) {
+        co_return JSONValue{};
+    }
+    auto kind = this->outboundTaskKindFor(taskId);
+    if (this->validationMode == validation::ValidationMode::Strict && kind.has_value()) {
+        const bool valid =
+            (*kind == tasks::TaskKind::ToolCall && validation::validateCallToolResultJson(response->result.value())) ||
+            (*kind == tasks::TaskKind::CreateMessage && validation::validateCreateMessageResultJson(response->result.value())) ||
+            (*kind == tasks::TaskKind::Elicitation && validation::validateElicitationResultJson(response->result.value()));
+        if (!valid) {
+            throw std::runtime_error("Validation failed: tasks/result payload shape");
+        }
+    }
+    co_return response->result.value();
+}
+
+mcp::async::Task<Task> Client::Impl::coCancelTask(const std::string& taskId) {
+    FUNC_SCOPE();
+    Task out;
+    auto request = std::make_unique<JSONRPCRequest>();
+    request->method = Methods::CancelTask;
+    JSONValue::Object paramsObj;
+    paramsObj["taskId"] = std::make_shared<JSONValue>(taskId);
+    request->params = JSONValue{paramsObj};
+    auto future = this->transport->SendRequest(std::move(request));
+    auto response = co_await mcp::async::makeFutureAwaitable(std::move(future));
+    if (!response || response->IsError() || !response->result.has_value()) {
+        throw std::runtime_error(response && response->error.has_value()
+            ? errorMessageFromPayload(response->error.value())
+            : "tasks/cancel failed");
+    }
+    if (this->validationMode == validation::ValidationMode::Strict &&
+        !validation::validateTaskJson(response->result.value())) {
+        throw std::runtime_error("Validation failed: tasks/cancel result shape");
+    }
+    out = tasks::ParseTask(response->result.value());
+    co_return out;
 }
 
 mcp::async::Task<JSONValue> Client::Impl::coCallTool(const std::string& name, const JSONValue& arguments) {
@@ -844,19 +1500,7 @@ mcp::async::Task<std::vector<Tool>> Client::Impl::coListTools() {
                     for (const auto& toolJson : toolsArray) {
                         Tool tool;
                         if (std::holds_alternative<JSONValue::Object>(toolJson->value)) {
-                            const auto& toolObj = std::get<JSONValue::Object>(toolJson->value);
-                            auto nameIt = toolObj.find("name");
-                            if (nameIt != toolObj.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                                tool.name = std::get<std::string>(nameIt->second->value);
-                            }
-                            auto descIt = toolObj.find("description");
-                            if (descIt != toolObj.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                                tool.description = std::get<std::string>(descIt->second->value);
-                            }
-                            auto schemaIt = toolObj.find("inputSchema");
-                            if (schemaIt != toolObj.end()) {
-                                tool.inputSchema = *schemaIt->second;
-                            }
+                            PopulateToolFromListItem(std::get<JSONValue::Object>(toolJson->value), tool);
                         }
                         tools.push_back(std::move(tool));
                     }
@@ -923,36 +1567,8 @@ mcp::async::Task<ToolsListResult> Client::Impl::coListToolsPaged(const std::opti
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Tool tool;
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            tool.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            tool.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto schemaIt = item.find("inputSchema");
-                        if (schemaIt != item.end()) {
-                            tool.inputSchema = *schemaIt->second;
-                        }
-                        auto outputSchemaIt = item.find("outputSchema");
-                        if (outputSchemaIt != item.end() && outputSchemaIt->second) {
-                            tool.outputSchema = *outputSchemaIt->second;
-                        }
-                        auto annotationsIt = item.find("annotations");
-                        if (annotationsIt != item.end() && annotationsIt->second) {
-                            tool.annotations = *annotationsIt->second;
-                        }
-                        auto executionIt = item.find("execution");
-                        if (executionIt != item.end() && executionIt->second) {
-                            tool.execution = *executionIt->second;
-                        }
-                        auto metaIt = item.find("_meta");
-                        if (metaIt != item.end() && metaIt->second) {
-                            tool.meta = *metaIt->second;
-                        }
+                        PopulateToolFromListItem(std::get<JSONValue::Object>(itemPtr->value), tool);
                         out.tools.push_back(std::move(tool));
                     }
                 }
@@ -1021,24 +1637,8 @@ mcp::async::Task<std::vector<Resource>> Client::Impl::coListResources() {
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Resource r;
-                        auto uriIt = item.find("uri");
-                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) {
-                            r.uri = std::get<std::string>(uriIt->second->value);
-                        }
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            r.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            r.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
-                            r.mimeType = std::get<std::string>(mimeIt->second->value);
-                        }
+                        PopulateResourceFromListItem(std::get<JSONValue::Object>(itemPtr->value), r);
                         resources.push_back(std::move(r));
                     }
                 }
@@ -1103,24 +1703,8 @@ mcp::async::Task<ResourcesListResult> Client::Impl::coListResourcesPaged(const s
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Resource r;
-                        auto uriIt = item.find("uri");
-                        if (uriIt != item.end() && std::holds_alternative<std::string>(uriIt->second->value)) {
-                            r.uri = std::get<std::string>(uriIt->second->value);
-                        }
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            r.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            r.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
-                            r.mimeType = std::get<std::string>(mimeIt->second->value);
-                        }
+                        PopulateResourceFromListItem(std::get<JSONValue::Object>(itemPtr->value), r);
                         out.resources.push_back(std::move(r));
                     }
                 }
@@ -1189,24 +1773,8 @@ mcp::async::Task<std::vector<ResourceTemplate>> Client::Impl::coListResourceTemp
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         ResourceTemplate rt;
-                        auto utIt = item.find("uriTemplate");
-                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) {
-                            rt.uriTemplate = std::get<std::string>(utIt->second->value);
-                        }
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            rt.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            rt.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
-                            rt.mimeType = std::get<std::string>(mimeIt->second->value);
-                        }
+                        PopulateResourceTemplateFromListItem(std::get<JSONValue::Object>(itemPtr->value), rt);
                         templates.push_back(std::move(rt));
                     }
                 }
@@ -1271,24 +1839,8 @@ mcp::async::Task<ResourceTemplatesListResult> Client::Impl::coListResourceTempla
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         ResourceTemplate rt;
-                        auto utIt = item.find("uriTemplate");
-                        if (utIt != item.end() && std::holds_alternative<std::string>(utIt->second->value)) {
-                            rt.uriTemplate = std::get<std::string>(utIt->second->value);
-                        }
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            rt.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            rt.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto mimeIt = item.find("mimeType");
-                        if (mimeIt != item.end() && std::holds_alternative<std::string>(mimeIt->second->value)) {
-                            rt.mimeType = std::get<std::string>(mimeIt->second->value);
-                        }
+                        PopulateResourceTemplateFromListItem(std::get<JSONValue::Object>(itemPtr->value), rt);
                         out.resourceTemplates.push_back(std::move(rt));
                     }
                 }
@@ -1360,20 +1912,8 @@ mcp::async::Task<std::vector<Prompt>> Client::Impl::coListPrompts() {
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Prompt pr;
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            pr.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            pr.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto argsIt = item.find("arguments");
-                        if (argsIt != item.end()) {
-                            pr.arguments = *argsIt->second;
-                        }
+                        PopulatePromptFromListItem(std::get<JSONValue::Object>(itemPtr->value), pr);
                         prompts.push_back(std::move(pr));
                     }
                 }
@@ -1441,20 +1981,8 @@ mcp::async::Task<PromptsListResult> Client::Impl::coListPromptsPaged(const std::
                         if (!itemPtr || !std::holds_alternative<JSONValue::Object>(itemPtr->value)) {
                             continue;
                         }
-                        const auto& item = std::get<JSONValue::Object>(itemPtr->value);
                         Prompt pr;
-                        auto nameIt = item.find("name");
-                        if (nameIt != item.end() && std::holds_alternative<std::string>(nameIt->second->value)) {
-                            pr.name = std::get<std::string>(nameIt->second->value);
-                        }
-                        auto descIt = item.find("description");
-                        if (descIt != item.end() && std::holds_alternative<std::string>(descIt->second->value)) {
-                            pr.description = std::get<std::string>(descIt->second->value);
-                        }
-                        auto argsIt = item.find("arguments");
-                        if (argsIt != item.end()) {
-                            pr.arguments = *argsIt->second;
-                        }
+                        PopulatePromptFromListItem(std::get<JSONValue::Object>(itemPtr->value), pr);
                         out.prompts.push_back(std::move(pr));
                     }
                 }
@@ -1629,6 +2157,39 @@ std::future<JSONValue> Client::CallTool(const std::string& name, const JSONValue
     return pImpl->coCallTool(name, arguments).toFuture();
 }
 
+std::future<CreateTaskResult> Client::CallToolTask(const std::string& name,
+                                                   const JSONValue& arguments,
+                                                   const TaskMetadata& task) {
+    FUNC_SCOPE();
+    return pImpl->coCallToolTask(name, arguments, task).toFuture();
+}
+
+std::future<Task> Client::GetTask(const std::string& taskId) {
+    FUNC_SCOPE();
+    return pImpl->coGetTask(taskId).toFuture();
+}
+
+std::future<std::vector<Task>> Client::ListTasks() {
+    FUNC_SCOPE();
+    return pImpl->coListTasks().toFuture();
+}
+
+std::future<TasksListResult> Client::ListTasksPaged(const std::optional<std::string>& cursor,
+                                                    const std::optional<int>& limit) {
+    FUNC_SCOPE();
+    return pImpl->coListTasksPaged(cursor, limit).toFuture();
+}
+
+std::future<JSONValue> Client::GetTaskResult(const std::string& taskId) {
+    FUNC_SCOPE();
+    return pImpl->coGetTaskResult(taskId).toFuture();
+}
+
+std::future<Task> Client::CancelTask(const std::string& taskId) {
+    FUNC_SCOPE();
+    return pImpl->coCancelTask(taskId).toFuture();
+}
+
 std::future<std::vector<Resource>> Client::ListResources() {
     FUNC_SCOPE();
     return pImpl->coListResources().toFuture();
@@ -1696,6 +2257,11 @@ void Client::RemoveNotificationHandler(const std::string& method) {
 void Client::SetProgressHandler(ProgressHandler handler) {
     FUNC_SCOPE();
     pImpl->progressHandler = std::move(handler);
+}
+
+void Client::SetTaskStatusHandler(TaskStatusHandler handler) {
+    FUNC_SCOPE();
+    pImpl->taskStatusHandler = std::move(handler);
 }
 
 void Client::SetRootsListHandler(RootsListHandler handler) {

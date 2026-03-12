@@ -155,6 +155,60 @@ public:
     //   Future resolving to JSON result mirroring tools/call response.
     //==========================================================================================================
     virtual std::future<JSONValue> CallTool(const std::string& name, const JSONValue& arguments) = 0;
+    //==========================================================================================================
+    // Requests receiver-managed task execution for a tool call and returns the created task metadata.
+    // Args:
+    //   name: Tool name.
+    //   arguments: JSON parameters.
+    //   task: Task retention metadata.
+    // Returns:
+    //   Future with created task metadata.
+    //==========================================================================================================
+    virtual std::future<CreateTaskResult> CallToolTask(const std::string& name,
+                                                       const JSONValue& arguments,
+                                                       const TaskMetadata& task) = 0;
+
+    ///////////////////////////////////////////// Task management //////////////////////////////////////////////
+    //==========================================================================================================
+    // Retrieves task metadata from the connected peer.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   Future with the current task state.
+    //==========================================================================================================
+    virtual std::future<Task> GetTask(const std::string& taskId) = 0;
+    //==========================================================================================================
+    // Lists peer-side tasks (non-paged helper).
+    // Returns:
+    //   Future with all listed tasks.
+    //==========================================================================================================
+    virtual std::future<std::vector<Task>> ListTasks() = 0;
+    //==========================================================================================================
+    // Lists peer-side tasks with optional paging.
+    // Args:
+    //   cursor: Optional opaque cursor.
+    //   limit: Optional page size; must be positive when provided.
+    // Returns:
+    //   Future with a task page and optional nextCursor.
+    //==========================================================================================================
+    virtual std::future<TasksListResult> ListTasksPaged(const std::optional<std::string>& cursor,
+                                                        const std::optional<int>& limit) = 0;
+    //==========================================================================================================
+    // Retrieves the original result payload for a terminal peer-side task.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   Future with either the original result payload or the original error payload.
+    //==========================================================================================================
+    virtual std::future<JSONValue> GetTaskResult(const std::string& taskId) = 0;
+    //==========================================================================================================
+    // Requests cancellation for a peer-side task.
+    // Args:
+    //   taskId: Receiver-generated task identifier.
+    // Returns:
+    //   Future with the updated task state.
+    //==========================================================================================================
+    virtual std::future<Task> CancelTask(const std::string& taskId) = 0;
 
     //////////////////////////////////////////// Resource management ///////////////////////////////////////////
     //==========================================================================================================
@@ -166,6 +220,16 @@ public:
     //   (none)
     //==========================================================================================================
     virtual void RegisterResource(const std::string& uri, ResourceHandler handler) = 0;
+
+    //==========================================================================================================
+    // Registers a cancellable, async resource handler with metadata.
+    // Args:
+    //   resource: Resource metadata (uri, name, optional icons/title/etc.).
+    //   handler: Async callback receiving a std::stop_token to cooperatively cancel work.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void RegisterResource(const Resource& resource, ResourceHandler handler) = 0;
 
     //==========================================================================================================
     // Unregisters the resource handler for a given URI.
@@ -232,6 +296,16 @@ public:
     //   (none)
     //==========================================================================================================
     virtual void RegisterPrompt(const std::string& name, PromptHandler handler) = 0;
+
+    //==========================================================================================================
+    // Registers a prompt handler with metadata.
+    // Args:
+    //   prompt: Prompt metadata (name, optional title/icons/etc.).
+    //   handler: Callback invoked for prompts/get.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void RegisterPrompt(const Prompt& prompt, PromptHandler handler) = 0;
 
     //==========================================================================================================
     // Unregisters a prompt by name.
@@ -356,6 +430,16 @@ public:
     //   Future with raw JSON result from the client's handler.
     //==========================================================================================================
     virtual std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) = 0;
+    //==========================================================================================================
+    // Requests receiver-managed task execution for sampling/createMessage.
+    // Args:
+    //   params: Message creation parameters.
+    //   task: Task retention metadata.
+    // Returns:
+    //   Future with created task metadata.
+    //==========================================================================================================
+    virtual std::future<CreateTaskResult> RequestCreateMessageTask(const CreateMessageParams& params,
+                                                                   const TaskMetadata& task) = 0;
 
     //==========================================================================================================
     // Requests the client to create a message (server-initiated sampling) with a caller-provided request id.
@@ -378,6 +462,16 @@ public:
     //   Future with client action/content result.
     //==========================================================================================================
     virtual std::future<ElicitationResult> RequestElicitation(const ElicitationRequest& request) = 0;
+    //==========================================================================================================
+    // Requests receiver-managed task execution for elicitation/create.
+    // Args:
+    //   request: Elicitation prompt metadata and requested schema.
+    //   task: Task retention metadata.
+    // Returns:
+    //   Future with created task metadata.
+    //==========================================================================================================
+    virtual std::future<CreateTaskResult> RequestElicitationTask(const ElicitationRequest& request,
+                                                                 const TaskMetadata& task) = 0;
 
     /////////////////////////////////////////////// Ping //////////////////////////////////////////////////////
     //==========================================================================================================
@@ -461,6 +555,17 @@ public:
     using ErrorHandler = std::function<void(const std::string& error)>;
     virtual void SetErrorHandler(ErrorHandler handler) = 0;
 
+    ////////////////////////////////////////// Task status tracking ////////////////////////////////////////////
+    //==========================================================================================================
+    // Registers a task status notification handler for peer-originated task updates.
+    // Args:
+    //   handler: Callback receiving the latest task snapshot from notifications/tasks/status.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    using TaskStatusHandler = std::function<void(const Task&)>;
+    virtual void SetTaskStatusHandler(TaskStatusHandler handler) = 0;
+
     /////////////////////////////////////////// Server capabilities ////////////////////////////////////////////
     //==========================================================================================================
     // Returns the server's current capabilities.
@@ -536,9 +641,19 @@ public:
     void UnregisterTool(const std::string& name) override;
     std::vector<Tool> ListTools() override;
     std::future<JSONValue> CallTool(const std::string& name, const JSONValue& arguments) override;
+    std::future<CreateTaskResult> CallToolTask(const std::string& name,
+                                               const JSONValue& arguments,
+                                               const TaskMetadata& task) override;
+    std::future<Task> GetTask(const std::string& taskId) override;
+    std::future<std::vector<Task>> ListTasks() override;
+    std::future<TasksListResult> ListTasksPaged(const std::optional<std::string>& cursor,
+                                                const std::optional<int>& limit) override;
+    std::future<JSONValue> GetTaskResult(const std::string& taskId) override;
+    std::future<Task> CancelTask(const std::string& taskId) override;
 
     // Resource management
     void RegisterResource(const std::string& uri, ResourceHandler handler) override;
+    void RegisterResource(const Resource& resource, ResourceHandler handler) override;
     void UnregisterResource(const std::string& uri) override;
     std::vector<Resource> ListResources() override;
     std::future<JSONValue> ReadResource(const std::string& uri) override;
@@ -550,6 +665,7 @@ public:
 
     // Prompt management
     void RegisterPrompt(const std::string& name, PromptHandler handler) override;
+    void RegisterPrompt(const Prompt& prompt, PromptHandler handler) override;
     void UnregisterPrompt(const std::string& name) override;
     std::vector<Prompt> ListPrompts() override;
     std::future<JSONValue> GetPrompt(const std::string& name, const JSONValue& arguments) override;
@@ -574,9 +690,13 @@ public:
 
     // Server-initiated sampling (request client to create a message)
     std::future<JSONValue> RequestCreateMessage(const CreateMessageParams& params) override;
+    std::future<CreateTaskResult> RequestCreateMessageTask(const CreateMessageParams& params,
+                                                           const TaskMetadata& task) override;
     std::future<JSONValue> RequestCreateMessageWithId(const CreateMessageParams& params,
                                                      const std::string& requestId) override;
     std::future<ElicitationResult> RequestElicitation(const ElicitationRequest& request) override;
+    std::future<CreateTaskResult> RequestElicitationTask(const ElicitationRequest& request,
+                                                         const TaskMetadata& task) override;
     std::future<void> Ping() override;
 
     // IServer message sending
@@ -591,6 +711,7 @@ public:
 
     // Error handling
     void SetErrorHandler(ErrorHandler handler) override;
+    void SetTaskStatusHandler(TaskStatusHandler handler) override;
 
     // Server capabilities
     ServerCapabilities GetCapabilities() const override;
