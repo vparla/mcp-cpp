@@ -419,17 +419,18 @@ inline void RegisterConformanceServerProfile(Server& server) {
     progressTool.description = "Report progress notifications during tool execution.";
     progressTool.inputSchema = detail::makeObjectSchema();
     server.RegisterTool(progressTool, [&server](const JSONValue&, std::stop_token st) -> std::future<ToolResult> {
-        return std::async(std::launch::async, [&server, st]() {
+        const std::string progressToken = CurrentProgressToken().value_or(std::string("progress-test-1"));
+        return std::async(std::launch::async, [&server, st, progressToken]() {
             if (!st.stop_requested()) {
-                server.SendProgress("progress-test-1", 0.0, "Starting tool execution").get();
+                server.SendProgress(progressToken, 0.0, "Starting tool execution").get();
             }
             detail::sleepForConformanceStep();
             if (!st.stop_requested()) {
-                server.SendProgress("progress-test-1", 0.5, "Processing tool execution").get();
+                server.SendProgress(progressToken, 0.5, "Processing tool execution").get();
             }
             detail::sleepForConformanceStep();
             if (!st.stop_requested()) {
-                server.SendProgress("progress-test-1", 1.0, "Completed tool execution").get();
+                server.SendProgress(progressToken, 1.0, "Completed tool execution").get();
             }
             ToolResult result;
             result.content.push_back(typed::makeText("Tool with progress completed."));

@@ -25,6 +25,13 @@ namespace mcp {
 class IServer;
 class IServerFactory;
 
+// Returns the current request ID while a server request handler is running.
+std::optional<std::string> CurrentRequestId();
+
+// Returns the current caller-provided progress token while a server request
+// handler is running, when params._meta.progressToken is present.
+std::optional<std::string> CurrentProgressToken();
+
 // Type aliases for handler functions
 using ToolResult = CallToolResult;
 using ResourceContent = ReadResourceResult;

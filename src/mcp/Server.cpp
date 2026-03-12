@@ -33,6 +33,85 @@
 
 namespace mcp {
 
+namespace {
+
+struct RequestContext {
+    std::optional<std::string> requestId;
+    std::optional<std::string> progressToken;
+};
+
+thread_local const RequestContext* gCurrentRequestContext = nullptr;
+
+std::optional<std::string> requestIdToString(const JSONRPCId& id) {
+    return std::visit(
+        [](const auto& value) -> std::optional<std::string> {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                return value.empty() ? std::nullopt : std::optional<std::string>(value);
+            } else if constexpr (std::is_same_v<T, int64_t>) {
+                return std::to_string(value);
+            }
+            return std::nullopt;
+        },
+        id);
+}
+
+std::optional<std::string> extractProgressToken(const std::optional<JSONValue>& params) {
+    if (!params.has_value() || !std::holds_alternative<JSONValue::Object>(params->value)) {
+        return std::nullopt;
+    }
+    const auto& paramsObj = std::get<JSONValue::Object>(params->value);
+    const auto metaIt = paramsObj.find("_meta");
+    if (metaIt == paramsObj.end() || !metaIt->second ||
+        !std::holds_alternative<JSONValue::Object>(metaIt->second->value)) {
+        return std::nullopt;
+    }
+    const auto& metaObj = std::get<JSONValue::Object>(metaIt->second->value);
+    const auto tokenIt = metaObj.find("progressToken");
+    if (tokenIt == metaObj.end() || !tokenIt->second) {
+        return std::nullopt;
+    }
+    if (std::holds_alternative<std::string>(tokenIt->second->value)) {
+        const auto& token = std::get<std::string>(tokenIt->second->value);
+        return token.empty() ? std::nullopt : std::optional<std::string>(token);
+    }
+    if (std::holds_alternative<int64_t>(tokenIt->second->value)) {
+        return std::to_string(std::get<int64_t>(tokenIt->second->value));
+    }
+    return std::nullopt;
+}
+
+class RequestContextScope {
+public:
+    explicit RequestContextScope(const RequestContext& context)
+        : previous_(gCurrentRequestContext) {
+        gCurrentRequestContext = &context;
+    }
+
+    ~RequestContextScope() {
+        gCurrentRequestContext = previous_;
+    }
+
+private:
+    const RequestContext* previous_{nullptr};
+};
+
+}  // namespace
+
+std::optional<std::string> CurrentRequestId() {
+    if (gCurrentRequestContext == nullptr) {
+        return std::nullopt;
+    }
+    return gCurrentRequestContext->requestId;
+}
+
+std::optional<std::string> CurrentProgressToken() {
+    if (gCurrentRequestContext == nullptr) {
+        return std::nullopt;
+    }
+    return gCurrentRequestContext->progressToken;
+}
+
 // Server implementation
 class Server::Impl {
 private:
@@ -1472,6 +1551,8 @@ std::unique_ptr<JSONRPCResponse> Server::Impl::dispatchRequest(const JSONRPCRequ
         const std::string idStr = Impl::idToString(req.id);
         auto token = this->registerCancelToken(idStr);
         struct ScopeGuard { std::function<void()> f; ~ScopeGuard(){ if (f) f(); } } guard{ [this, idStr](){ this->unregisterCancelToken(idStr); } };
+        const RequestContext requestContext{requestIdToString(req.id), extractProgressToken(req.params)};
+        RequestContextScope requestContextScope(requestContext);
 
         if (req.method == Methods::Ping) {
             auto resp = std::make_unique<JSONRPCResponse>();

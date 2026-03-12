@@ -445,7 +445,7 @@ public:
                     });
                     co_return;
                 }
-                auto res = makeResponse(req);
+                auto res = co_await coMakeResponse(std::move(req));
                 co_await http::async_write(stream, res, net::use_awaitable);
                 break; // close after single request
             }
@@ -544,7 +544,7 @@ public:
                     });
                     co_return;
                 }
-                auto res = makeResponse(req);
+                auto res = co_await coMakeResponse(std::move(req));
                 co_await http::async_write(tls, res, net::use_awaitable);
                 break; // close after single request
             }
@@ -830,6 +830,11 @@ public:
             res.prepare_payload();
             return res;
         }
+        if (isNotification || isResponse) {
+            res.result(http::status::accepted);
+            res.body().clear();
+            return res;
+        }
         res.body() = std::string("{}");
         res.prepare_payload();
         return res;
@@ -891,6 +896,19 @@ public:
         res.body() = std::string("{\"error\":\"Not found\"}");
         res.prepare_payload();
         return res;
+    }
+
+    net::awaitable<http::response<http::string_body>> coMakeResponse(http::request<http::string_body> req) {
+        auto future = std::async(std::launch::async, [this, request = std::move(req)]() mutable {
+            return makeResponse(request);
+        });
+        auto executor = co_await net::this_coro::executor;
+        net::steady_timer timer(executor);
+        while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            timer.expires_after(std::chrono::milliseconds(5));
+            co_await timer.async_wait(net::use_awaitable);
+        }
+        co_return future.get();
     }
 
     net::awaitable<void> acceptLoop() {
