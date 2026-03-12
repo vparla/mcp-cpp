@@ -29,11 +29,16 @@ class IServerFactory;
 using ToolResult = CallToolResult;
 using ResourceContent = ReadResourceResult;
 using PromptResult = GetPromptResult;
+using ResourceTemplateVariables = std::unordered_map<std::string, std::string>;
 
 // Async, cancellable handler forms using std::stop_token (C++20)
 // Note: These are the canonical handler types. Handlers must return a future.
 using ToolHandler = std::function<std::future<ToolResult>(const JSONValue&, std::stop_token)>;
 using ResourceHandler = std::function<std::future<ResourceContent>(const std::string&, std::stop_token)>;
+using ResourceTemplateHandler =
+    std::function<std::future<ResourceContent>(const std::string&,
+                                               const ResourceTemplateVariables&,
+                                               std::stop_token)>;
 using PromptHandler = std::function<PromptResult(const JSONValue&)>;
 using CompletionHandler = std::function<std::future<CompletionResult>(const CompleteParams&)>;
 
@@ -267,6 +272,17 @@ public:
     //   (none)
     //==========================================================================================================
     virtual void RegisterResourceTemplate(const ResourceTemplate& resourceTemplate) = 0;
+
+    //==========================================================================================================
+    // Registers a resource template with a concrete read handler.
+    // Args:
+    //   resourceTemplate: Template metadata to add or replace (by uriTemplate).
+    //   handler: Async callback invoked for concrete URIs that match the template.
+    // Returns:
+    //   (none)
+    //==========================================================================================================
+    virtual void RegisterResourceTemplate(const ResourceTemplate& resourceTemplate,
+                                          ResourceTemplateHandler handler) = 0;
 
     //==========================================================================================================
     // Unregisters a resource template by uriTemplate.
@@ -660,6 +676,8 @@ public:
 
     // Resource template management
     void RegisterResourceTemplate(const ResourceTemplate& resourceTemplate) override;
+    void RegisterResourceTemplate(const ResourceTemplate& resourceTemplate,
+                                  ResourceTemplateHandler handler) override;
     void UnregisterResourceTemplate(const std::string& uriTemplate) override;
     std::vector<ResourceTemplate> ListResourceTemplates() override;
 

@@ -79,6 +79,17 @@ private:
     // Helper methods to keep request handling concise
     // Cancellation token used for request cancellation tracking
     struct CancellationToken { std::atomic<bool> cancelled{false}; };
+    struct RegisteredResourceTemplate {
+        ResourceTemplate metadata;
+        ResourceTemplateHandler handler;
+    };
+    struct ResolvedResourceRead {
+        ResourceHandler directHandler;
+        ResourceTemplateHandler templateHandler;
+        ResourceTemplateVariables templateVariables;
+        bool usesTemplate{false};
+        bool ambiguous{false};
+    };
     std::unique_ptr<JSONRPCResponse> dispatchRequest(const JSONRPCRequest& req);
     void sendInitializedAndListChangedAsync();
     std::unique_ptr<JSONRPCResponse> handleCreateMessageRequest(const JSONRPCRequest& req, const std::shared_ptr<CancellationToken>& token);
@@ -162,6 +173,208 @@ private:
             }
         }, id);
         return idStr;
+    }
+
+    static std::optional<ResourceTemplateVariables> matchResourceTemplate(const std::string& uriTemplate,
+                                                                          const std::string& uri) {
+        struct Token {
+            bool isVariable{false};
+            std::string value;
+        };
+
+        std::vector<Token> tokens;
+        size_t cursor = 0;
+        while (cursor < uriTemplate.size()) {
+            const size_t open = uriTemplate.find('{', cursor);
+            if (open == std::string::npos) {
+                tokens.push_back(Token{false, uriTemplate.substr(cursor)});
+                break;
+            }
+            if (open > cursor) {
+                tokens.push_back(Token{false, uriTemplate.substr(cursor, open - cursor)});
+            }
+            const size_t close = uriTemplate.find('}', open + 1);
+            if (close == std::string::npos || close == open + 1) {
+                return std::nullopt;
+            }
+            tokens.push_back(Token{true, uriTemplate.substr(open + 1, close - open - 1)});
+            cursor = close + 1;
+        }
+
+        ResourceTemplateVariables variables;
+        std::function<bool(size_t, size_t)> match = [&](const size_t tokenIndex, const size_t uriIndex) -> bool {
+            if (tokenIndex == tokens.size()) {
+                return uriIndex == uri.size();
+            }
+            if (uriIndex > uri.size()) {
+                return false;
+            }
+
+            const Token& token = tokens[tokenIndex];
+            if (!token.isVariable) {
+                if (uri.compare(uriIndex, token.value.size(), token.value) != 0) {
+                    return false;
+                }
+                return match(tokenIndex + 1, uriIndex + token.value.size());
+            }
+
+            const auto previous = variables.find(token.value);
+            const bool hadPrevious = previous != variables.end();
+            const std::string previousValue = hadPrevious ? previous->second : std::string();
+
+            for (size_t candidateEnd = uriIndex; candidateEnd <= uri.size(); ++candidateEnd) {
+                variables[token.value] = uri.substr(uriIndex, candidateEnd - uriIndex);
+                if (match(tokenIndex + 1, candidateEnd)) {
+                    return true;
+                }
+            }
+
+            if (hadPrevious) {
+                variables[token.value] = previousValue;
+            } else {
+                variables.erase(token.value);
+            }
+            return false;
+        };
+
+        if (!match(0, 0)) {
+            return std::nullopt;
+        }
+        return variables;
+    }
+
+    ResolvedResourceRead resolveResourceRead(const std::string& uri) {
+        ResolvedResourceRead resolved;
+        std::lock_guard<std::mutex> lock(this->registryMutex);
+
+        auto directIt = this->resourceHandlers.find(uri);
+        if (directIt != this->resourceHandlers.end()) {
+            resolved.directHandler = directIt->second;
+            return resolved;
+        }
+
+        for (const auto& entry : this->resourceTemplates) {
+            if (!entry.handler) {
+                continue;
+            }
+            auto variables = matchResourceTemplate(entry.metadata.uriTemplate, uri);
+            if (!variables.has_value()) {
+                continue;
+            }
+            if (resolved.usesTemplate) {
+                resolved.ambiguous = true;
+                resolved.templateHandler = ResourceTemplateHandler{};
+                resolved.templateVariables.clear();
+                return resolved;
+            }
+            resolved.usesTemplate = true;
+            resolved.templateHandler = entry.handler;
+            resolved.templateVariables = std::move(variables.value());
+        }
+        return resolved;
+    }
+
+    JSONValue buildReadResourceResultJson(ReadResourceResult result,
+                                          const std::optional<int64_t>& offsetOpt,
+                                          const std::optional<int64_t>& lengthOpt) const {
+        bool hasMeta = false;
+        JSONValue metaCandidate;
+        for (const auto& value : result.contents) {
+            if (!std::holds_alternative<JSONValue::Object>(value.value)) {
+                continue;
+            }
+            const auto& objectValue = std::get<JSONValue::Object>(value.value);
+            auto metaIt = objectValue.find("_meta");
+            if (metaIt != objectValue.end() && metaIt->second) {
+                metaCandidate = *(metaIt->second);
+                hasMeta = true;
+                break;
+            }
+        }
+
+        JSONValue::Object resultObj;
+        JSONValue::Array contents;
+        if (!offsetOpt.has_value() && !lengthOpt.has_value()) {
+            for (auto& value : result.contents) {
+                contents.push_back(std::make_shared<JSONValue>(std::move(value)));
+            }
+        } else {
+            std::string flattenedText;
+            flattenedText.reserve(1024);
+            for (const auto& value : result.contents) {
+                if (!std::holds_alternative<JSONValue::Object>(value.value)) {
+                    throw std::runtime_error("Chunking requires text content");
+                }
+                const auto& objectValue = std::get<JSONValue::Object>(value.value);
+                auto typeIt = objectValue.find("type");
+                auto textIt = objectValue.find("text");
+                if (typeIt == objectValue.end() || textIt == objectValue.end() ||
+                    !typeIt->second || !textIt->second ||
+                    !std::holds_alternative<std::string>(typeIt->second->value) ||
+                    std::get<std::string>(typeIt->second->value) != std::string("text") ||
+                    !std::holds_alternative<std::string>(textIt->second->value)) {
+                    throw std::runtime_error("Chunking requires text content");
+                }
+                flattenedText += std::get<std::string>(textIt->second->value);
+            }
+
+            size_t start = static_cast<size_t>(offsetOpt.value_or(0));
+            if (start < flattenedText.size()) {
+                size_t take = lengthOpt.has_value()
+                    ? static_cast<size_t>(lengthOpt.value())
+                    : flattenedText.size() - start;
+                take = std::min(take, flattenedText.size() - start);
+
+                size_t clampBytes = 0;
+                auto expIt = capabilities.experimental.find("resourceReadChunking");
+                if (expIt != capabilities.experimental.end() &&
+                    std::holds_alternative<JSONValue::Object>(expIt->second.value)) {
+                    const auto& expObj = std::get<JSONValue::Object>(expIt->second.value);
+                    auto maxIt = expObj.find("maxChunkBytes");
+                    if (maxIt != expObj.end() && maxIt->second &&
+                        std::holds_alternative<int64_t>(maxIt->second->value)) {
+                        const int64_t maxValue = std::get<int64_t>(maxIt->second->value);
+                        if (maxValue > 0) {
+                            clampBytes = static_cast<size_t>(maxValue);
+                        }
+                    }
+                }
+                if (clampBytes > 0 && take > clampBytes) {
+                    take = clampBytes;
+                }
+
+                JSONValue::Object textContent;
+                textContent["type"] = std::make_shared<JSONValue>(std::string("text"));
+                textContent["text"] = std::make_shared<JSONValue>(flattenedText.substr(start, take));
+                contents.push_back(std::make_shared<JSONValue>(JSONValue{textContent}));
+            }
+        }
+
+        resultObj["contents"] = std::make_shared<JSONValue>(contents);
+        if (hasMeta) {
+            const bool uiSupported =
+                this->clientCapabilities.extensions.find(Extensions::uiExtensionId) !=
+                this->clientCapabilities.extensions.end();
+            if (!uiSupported && std::holds_alternative<JSONValue::Object>(metaCandidate.value)) {
+                auto metaObj = std::get<JSONValue::Object>(metaCandidate.value);
+                auto uiIt = metaObj.find("ui");
+                if (uiIt != metaObj.end()) {
+                    metaObj.erase(uiIt);
+                }
+                if (!metaObj.empty()) {
+                    resultObj["_meta"] = std::make_shared<JSONValue>(JSONValue{metaObj});
+                }
+            } else {
+                resultObj["_meta"] = std::make_shared<JSONValue>(metaCandidate);
+            }
+        }
+
+        JSONValue resultJson{resultObj};
+        if (this->validationMode == validation::ValidationMode::Strict &&
+            !validation::validateReadResourceResultJson(resultJson)) {
+            throw std::runtime_error("Invalid resource read result shape");
+        }
+        return resultJson;
     }
 
     void logInvalidCreateMessageParamsContext(const JSONValue& paramsVal) const {
@@ -450,7 +663,10 @@ private:
     std::vector<ResourceTemplate> templatesCopy;
     {
         std::lock_guard<std::mutex> lock(this->registryMutex);
-        templatesCopy = this->resourceTemplates;
+        templatesCopy.reserve(this->resourceTemplates.size());
+        for (const auto& entry : this->resourceTemplates) {
+            templatesCopy.push_back(entry.metadata);
+        }
     }
     std::sort(templatesCopy.begin(), templatesCopy.end(), [](const ResourceTemplate& a, const ResourceTemplate& b){ return a.uriTemplate < b.uriTemplate; });
     const size_t total = templatesCopy.size();
@@ -679,15 +895,12 @@ private:
         errors::McpError e; e.code = JSONRPCErrorCodes::InvalidParams; e.message = "Invalid offset/length";
         return errors::makeErrorResponse(req.id, e);
     }
-    ResourceHandler handler;
-    {
-        std::lock_guard<std::mutex> lock(this->registryMutex);
-        auto it = this->resourceHandlers.find(uri);
-        if (it != this->resourceHandlers.end()) {
-            handler = it->second;
-        }
+    const ResolvedResourceRead resolved = resolveResourceRead(uri);
+    if (resolved.ambiguous) {
+        errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Ambiguous resource template match";
+        return errors::makeErrorResponse(req.id, e);
     }
-    if (!handler) {
+    if (!resolved.directHandler && !resolved.templateHandler) {
         errors::McpError e; e.code = JSONRPCErrorCodes::ResourceNotFound; e.message = "Resource not found";
         return errors::makeErrorResponse(req.id, e);
     }
@@ -698,8 +911,13 @@ private:
 
     ReadResourceResult rr;
     try {
-        auto fut = handler(uri, src->get_token());
-        rr = fut.get();
+        if (resolved.usesTemplate) {
+            auto fut = resolved.templateHandler(uri, resolved.templateVariables, src->get_token());
+            rr = fut.get();
+        } else {
+            auto fut = resolved.directHandler(uri, src->get_token());
+            rr = fut.get();
+        }
     } catch (const std::exception& e) {
         errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
         return errors::makeErrorResponse(req.id, err);
@@ -709,101 +927,16 @@ private:
         return errors::makeErrorResponse(req.id, err);
     }
 
-    // Generate result (optionally applying experimental chunking)
-    bool hasMeta = false;
-    JSONValue metaCandidate;
-    for (const auto& v : rr.contents) {
-        if (std::holds_alternative<JSONValue::Object>(v.value)) {
-            const auto& o = std::get<JSONValue::Object>(v.value);
-            auto itMeta = o.find("_meta");
-            if (itMeta != o.end() && itMeta->second) {
-                metaCandidate = *(itMeta->second);
-                hasMeta = true;
-                break;
-            }
-        }
+    try {
+        JSONValue result = buildReadResourceResultJson(std::move(rr), offsetOpt, lengthOpt);
+        auto resp = std::make_unique<JSONRPCResponse>();
+        resp->id = req.id;
+        resp->result = std::move(result);
+        return resp;
+    } catch (const std::exception& e) {
+        errors::McpError err; err.code = JSONRPCErrorCodes::InternalError; err.message = e.what();
+        return errors::makeErrorResponse(req.id, err);
     }
-    JSONValue::Object obj;
-    JSONValue::Array contents;
-    if (!offsetOpt.has_value() && !lengthOpt.has_value()) {
-        for (auto& v : rr.contents) { contents.push_back(std::make_shared<JSONValue>(std::move(v))); }
-    } else {
-        // Flatten text content and slice
-        std::string flat;
-        flat.reserve(1024);
-        for (const auto& v : rr.contents) {
-            if (!std::holds_alternative<JSONValue::Object>(v.value)) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
-                return errors::makeErrorResponse(req.id, e);
-            }
-            const auto& o = std::get<JSONValue::Object>(v.value);
-            auto itType = o.find("type"); auto itText = o.find("text");
-            if (itType == o.end() || itText == o.end() || !itType->second || !itText->second) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
-                return errors::makeErrorResponse(req.id, e);
-            }
-            if (!std::holds_alternative<std::string>(itType->second->value) || std::get<std::string>(itType->second->value) != std::string("text")) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
-                return errors::makeErrorResponse(req.id, e);
-            }
-            if (!std::holds_alternative<std::string>(itText->second->value)) {
-                errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Chunking requires text content";
-                return errors::makeErrorResponse(req.id, e);
-            }
-            flat += std::get<std::string>(itText->second->value);
-        }
-        size_t start = static_cast<size_t>(offsetOpt.value_or(0));
-        if (start >= flat.size()) {
-            // return empty contents
-        } else {
-            size_t maxLen = flat.size() - start;
-            size_t take = lengthOpt.has_value() ? static_cast<size_t>(lengthOpt.value()) : maxLen;
-            if (take > maxLen) {
-                take = maxLen;
-            }
-            // Enforce hard clamp if advertised via capabilities.experimental.resourceReadChunking.maxChunkBytes
-            size_t clampBytes = 0;
-            auto itExp = capabilities.experimental.find("resourceReadChunking");
-            if (itExp != capabilities.experimental.end() && std::holds_alternative<JSONValue::Object>(itExp->second.value)) {
-                const auto& expObj = std::get<JSONValue::Object>(itExp->second.value);
-                auto itMax = expObj.find("maxChunkBytes");
-                if (itMax != expObj.end() && itMax->second && std::holds_alternative<int64_t>(itMax->second->value)) {
-                    int64_t v = std::get<int64_t>(itMax->second->value);
-                    if (v > 0) {
-                        clampBytes = static_cast<size_t>(v);
-                    }
-                }
-            }
-            if (clampBytes > 0 && take > clampBytes) {
-                take = clampBytes;
-            }
-            std::string slice = flat.substr(start, take);
-            JSONValue::Object t; t["type"] = std::make_shared<JSONValue>(std::string("text")); t["text"] = std::make_shared<JSONValue>(slice);
-            contents.push_back(std::make_shared<JSONValue>(JSONValue{t}));
-        }
-    }
-    obj["contents"] = std::make_shared<JSONValue>(contents);
-    if (hasMeta) {
-        bool uiSupported = (this->clientCapabilities.extensions.find(Extensions::uiExtensionId) != this->clientCapabilities.extensions.end());
-        if (!uiSupported && std::holds_alternative<JSONValue::Object>(metaCandidate.value)) {
-            auto metaObj = std::get<JSONValue::Object>(metaCandidate.value);
-            auto itUi = metaObj.find("ui");
-            if (itUi != metaObj.end()) { metaObj.erase(itUi); }
-            if (!metaObj.empty()) {
-                obj["_meta"] = std::make_shared<JSONValue>(JSONValue{metaObj});
-            }
-        } else {
-            obj["_meta"] = std::make_shared<JSONValue>(metaCandidate);
-        }
-    }
-    JSONValue result{obj};
-    if (this->validationMode == validation::ValidationMode::Strict) {
-        if (!validation::validateReadResourceResultJson(result)) {
-            LOG_ERROR("Validation failed (Strict): {} result invalid (server)", Methods::ReadResource);
-            errors::McpError e; e.code = JSONRPCErrorCodes::InternalError; e.message = "Invalid resource read result shape"; return errors::makeErrorResponse(req.id, e);
-        }
-    }
-    auto resp = std::make_unique<JSONRPCResponse>(); resp->id = req.id; resp->result = result; return resp;
 }
     std::shared_ptr<CancellationToken> registerCancelToken(const std::string& idStr) {
         if (idStr.empty()) {
@@ -891,7 +1024,7 @@ private:
     std::unordered_map<std::string, Resource> resourceMetadata;
     std::unordered_map<std::string, Prompt> promptMetadata;
     std::vector<std::string> resourceUris;
-    std::vector<ResourceTemplate> resourceTemplates;
+    std::vector<RegisteredResourceTemplate> resourceTemplates;
     
     // Mutex for thread safety
     std::mutex registryMutex;
@@ -1904,45 +2037,21 @@ mcp::async::Task<Task> Server::Impl::coCancelTask(const std::string& taskId) {
 
 mcp::async::Task<JSONValue> Server::Impl::coReadResource(const std::string& uri) {
     FUNC_SCOPE();
-    ResourceHandler handlerCopy;
-    {
-        std::lock_guard<std::mutex> lock(this->registryMutex);
-        auto it = this->resourceHandlers.find(uri);
-        if (it != this->resourceHandlers.end()) {
-            handlerCopy = it->second;
-        }
+    const ResolvedResourceRead resolved = resolveResourceRead(uri);
+    if (resolved.ambiguous) {
+        throw std::runtime_error("Ambiguous resource template match");
     }
-    if (handlerCopy) {
+    if (resolved.directHandler || resolved.templateHandler) {
         std::stop_source src;
-        auto fut = handlerCopy(uri, src.get_token());
-        ResourceContent result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
-        JSONValue::Object resultObj;
-        JSONValue::Array contentsArray;
-        bool hasMeta = false;
-        JSONValue metaCandidate;
-        for (auto& v : result.contents) {
-            if (!hasMeta && std::holds_alternative<JSONValue::Object>(v.value)) {
-                const auto& o = std::get<JSONValue::Object>(v.value);
-                auto itMeta = o.find("_meta");
-                if (itMeta != o.end() && itMeta->second) { metaCandidate = *(itMeta->second); hasMeta = true; }
-            }
-            contentsArray.push_back(std::make_shared<JSONValue>(std::move(v)));
+        ResourceContent result;
+        if (resolved.usesTemplate) {
+            auto fut = resolved.templateHandler(uri, resolved.templateVariables, src.get_token());
+            result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
+        } else {
+            auto fut = resolved.directHandler(uri, src.get_token());
+            result = co_await mcp::async::makeFutureAwaitable(std::move(fut));
         }
-        resultObj["contents"] = std::make_shared<JSONValue>(contentsArray);
-        if (hasMeta) {
-            bool uiSupported = (this->clientCapabilities.extensions.find(Extensions::uiExtensionId) != this->clientCapabilities.extensions.end());
-            if (!uiSupported && std::holds_alternative<JSONValue::Object>(metaCandidate.value)) {
-                auto mo = std::get<JSONValue::Object>(metaCandidate.value);
-                auto itUi = mo.find("ui");
-                if (itUi != mo.end()) { mo.erase(itUi); }
-                if (!mo.empty()) {
-                    resultObj["_meta"] = std::make_shared<JSONValue>(JSONValue{mo});
-                }
-            } else {
-                resultObj["_meta"] = std::make_shared<JSONValue>(metaCandidate);
-            }
-        }
-        co_return JSONValue{resultObj};
+        co_return buildReadResourceResultJson(std::move(result), std::nullopt, std::nullopt);
     }
     co_return JSONValue{nullptr};
 }
@@ -3038,12 +3147,37 @@ void Server::RegisterResourceTemplate(const ResourceTemplate& resourceTemplate) 
     {//lock scope
         std::lock_guard<std::mutex> lock(pImpl->registryMutex);
         auto& v = pImpl->resourceTemplates;
-        v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == resourceTemplate.uriTemplate; }), v.end());
-        v.push_back(resourceTemplate);
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [&](const Server::Impl::RegisteredResourceTemplate& entry) {
+                                   return entry.metadata.uriTemplate == resourceTemplate.uriTemplate;
+                               }),
+                v.end());
+        v.push_back(Server::Impl::RegisteredResourceTemplate{resourceTemplate, ResourceTemplateHandler{}});
         notify = (pImpl->transport && pImpl->transport->IsConnected());
     }
     if (notify) {
         (void) this->NotifyResourcesListChanged().get();
+    }
+}
+
+void Server::RegisterResourceTemplate(const ResourceTemplate& resourceTemplate,
+                                      ResourceTemplateHandler handler) {
+    FUNC_SCOPE();
+    LOG_DEBUG("Registering resource template handler: {}", resourceTemplate.uriTemplate);
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(pImpl->registryMutex);
+        auto& v = pImpl->resourceTemplates;
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [&](const Server::Impl::RegisteredResourceTemplate& entry) {
+                                   return entry.metadata.uriTemplate == resourceTemplate.uriTemplate;
+                               }),
+                v.end());
+        v.push_back(Server::Impl::RegisteredResourceTemplate{resourceTemplate, std::move(handler)});
+        notify = (pImpl->transport && pImpl->transport->IsConnected());
+    }
+    if (notify) {
+        (void)this->NotifyResourcesListChanged().get();
     }
 }
 
@@ -3054,7 +3188,11 @@ void Server::UnregisterResourceTemplate(const std::string& uriTemplate) {
     {//lock scope
         std::lock_guard<std::mutex> lock(pImpl->registryMutex);
         auto& v = pImpl->resourceTemplates;
-        v.erase(std::remove_if(v.begin(), v.end(), [&](const ResourceTemplate& rt){ return rt.uriTemplate == uriTemplate; }), v.end());
+        v.erase(std::remove_if(v.begin(), v.end(),
+                               [&](const Server::Impl::RegisteredResourceTemplate& entry) {
+                                   return entry.metadata.uriTemplate == uriTemplate;
+                               }),
+                v.end());
         notify = (pImpl->transport && pImpl->transport->IsConnected());
     }
     if (notify) { 
@@ -3066,7 +3204,11 @@ std::vector<ResourceTemplate> Server::ListResourceTemplates() {
     FUNC_SCOPE();
     {//lock scope
         std::lock_guard<std::mutex> lock(pImpl->registryMutex);
-        std::vector<ResourceTemplate> out = pImpl->resourceTemplates;
+        std::vector<ResourceTemplate> out;
+        out.reserve(pImpl->resourceTemplates.size());
+        for (const auto& entry : pImpl->resourceTemplates) {
+            out.push_back(entry.metadata);
+        }
         return out;
     }
 }

@@ -222,6 +222,107 @@ public:
         session->cv.notify_all();
     }
 
+    static std::string toLowerAscii(std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return value;
+    }
+
+    static std::string trimCopy(std::string value) {
+        auto notSpace = [](unsigned char ch) { return std::isspace(ch) == 0; };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+        value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+        return value;
+    }
+
+    bool shouldValidateDnsRebinding() const {
+        std::string address = trimCopy(toLowerAscii(opts.address));
+        if (address == "localhost") {
+            return true;
+        }
+        boost::system::error_code ec;
+        const auto parsed = net::ip::make_address(address, ec);
+        return !ec && parsed.is_loopback();
+    }
+
+    static std::string extractAuthorityHost(const std::string& authorityValue) {
+        std::string authority = trimCopy(authorityValue);
+        if (authority.empty()) {
+            return {};
+        }
+        if (authority.front() == '[') {
+            const size_t closing = authority.find(']');
+            if (closing == std::string::npos) {
+                return {};
+            }
+            return authority.substr(1, closing - 1);
+        }
+
+        const size_t colon = authority.rfind(':');
+        if (colon != std::string::npos && authority.find(':') == colon) {
+            return authority.substr(0, colon);
+        }
+        return authority;
+    }
+
+    static bool isLocalAuthorityHost(const std::string& hostValue) {
+        const std::string host = toLowerAscii(trimCopy(hostValue));
+        if (host.empty()) {
+            return false;
+        }
+        if (host == "localhost") {
+            return true;
+        }
+        boost::system::error_code ec;
+        const auto parsed = net::ip::make_address(host, ec);
+        return !ec && parsed.is_loopback();
+    }
+
+    static std::optional<std::string> extractOriginHost(const std::string& originHeader) {
+        std::string origin = trimCopy(originHeader);
+        if (origin.empty()) {
+            return std::string();
+        }
+        const size_t schemePos = origin.find("://");
+        if (schemePos == std::string::npos) {
+            return std::nullopt;
+        }
+        origin = origin.substr(schemePos + 3);
+        const size_t slash = origin.find('/');
+        const std::string authority = slash == std::string::npos ? origin : origin.substr(0, slash);
+        return extractAuthorityHost(authority);
+    }
+
+    bool validateLocalHeaders(const http::request<http::string_body>& req,
+                              http::response<http::string_body>& res) const {
+        if (!shouldValidateDnsRebinding()) {
+            return true;
+        }
+
+        const std::string host = extractAuthorityHost(std::string(req[http::field::host]));
+        if (!isLocalAuthorityHost(host)) {
+            res.result(http::status::forbidden);
+            res.body() = std::string("{\"error\":\"Forbidden Host header\"}");
+            res.prepare_payload();
+            return false;
+        }
+
+        const std::string originHeader = std::string(req["Origin"]);
+        if (originHeader.empty()) {
+            return true;
+        }
+
+        const auto originHost = extractOriginHost(originHeader);
+        if (!originHost.has_value() || !isLocalAuthorityHost(originHost.value())) {
+            res.result(http::status::forbidden);
+            res.body() = std::string("{\"error\":\"Forbidden Origin header\"}");
+            res.prepare_payload();
+            return false;
+        }
+        return true;
+    }
+
     bool validateProtocolHeader(const http::request<http::string_body>& req,
                                 const std::shared_ptr<SessionState>& session,
                                 http::response<http::string_body>& res) {
@@ -288,6 +389,10 @@ public:
                     http::response<http::string_body> res{http::status::bad_request, req.version()};
                     res.set(http::field::content_type, "application/json");
                     res.keep_alive(false);
+                    if (!validateLocalHeaders(req, res)) {
+                        co_await http::async_write(stream, res, net::use_awaitable);
+                        break;
+                    }
                     if (!session) {
                         res.result(http::status::bad_request);
                         res.body() = std::string("{\"error\":\"Missing or invalid session\"}");
@@ -384,6 +489,10 @@ public:
                     http::response<http::string_body> res{http::status::bad_request, req.version()};
                     res.set(http::field::content_type, "application/json");
                     res.keep_alive(false);
+                    if (!validateLocalHeaders(req, res)) {
+                        co_await http::async_write(tls, res, net::use_awaitable);
+                        break;
+                    }
                     if (!session) {
                         res.result(http::status::bad_request);
                         res.body() = std::string("{\"error\":\"Missing or invalid session\"}");
@@ -730,6 +839,10 @@ public:
         http::response<http::string_body> res{http::status::ok, req.version()};
         res.set(http::field::content_type, "application/json");
         res.keep_alive(false);
+
+        if (!validateLocalHeaders(req, res)) {
+            return res;
+        }
 
         const std::string target = std::string(req.target());
 

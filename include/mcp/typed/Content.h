@@ -151,7 +151,25 @@ inline std::vector<std::string> collectText(const CallToolResult& r) {
 }
 
 inline std::vector<std::string> collectText(const ReadResourceResult& r) {
-    return collectText(r.contents);
+    std::vector<std::string> out;
+    out.reserve(r.contents.size());
+    for (const auto& value : r.contents) {
+        auto typedText = getText(value);
+        if (typedText.has_value()) {
+            out.push_back(typedText.value());
+            continue;
+        }
+        if (!std::holds_alternative<JSONValue::Object>(value.value)) {
+            continue;
+        }
+        const auto& objectValue = std::get<JSONValue::Object>(value.value);
+        auto textIt = objectValue.find("text");
+        if (textIt != objectValue.end() && textIt->second &&
+            std::holds_alternative<std::string>(textIt->second->value)) {
+            out.push_back(std::get<std::string>(textIt->second->value));
+        }
+    }
+    return out;
 }
 
 inline std::vector<std::string> collectText(const GetPromptResult& r) {

@@ -23,7 +23,9 @@ FetchContent_MakeAvailable(googletest)
 
 add_executable(mcp_tests
   test_architecture_enforcement.cpp
+  test_conformance_server_support.cpp
   test_resource_templates.cpp
+  test_resource_template_reads.cpp
   test_prompts_get.cpp
   test_tools_inputschema.cpp
   test_capabilities_extensions.cpp
@@ -76,6 +78,7 @@ add_executable(mcp_tests
   test_http_auth.cpp
   test_http_server_bearer.cpp
   test_http_server_metadata.cpp
+  test_http_origin_validation.cpp
   test_http_streamable.cpp
   test_message_router.cpp
   test_content_framer.cpp
@@ -95,7 +98,7 @@ target_link_libraries(mcp_tests
 
 target_compile_features(mcp_tests PRIVATE cxx_std_20)
 
-target_include_directories(mcp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_include_directories(mcp_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include ${CMAKE_SOURCE_DIR})
 target_compile_definitions(mcp_tests PRIVATE MCP_REPO_ROOT="${CMAKE_SOURCE_DIR}")
 
 include(GoogleTest)

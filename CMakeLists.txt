@@ -114,6 +114,7 @@ endif()
 if(MCP_BUILD_EXAMPLES)
   # Examples
   add_subdirectory(examples/basic)
+  add_subdirectory(examples/conformance_server)
   add_subdirectory(examples/json_test)
   add_subdirectory(examples/mcp_client)
   add_subdirectory(examples/mcp_server)

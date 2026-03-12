@@ -234,16 +234,10 @@ inline bool isPromptMessageItem(const JSONValue& v) {
         return false;
     }
     auto contentIt = obj.find("content");
-    if (contentIt == obj.end() || !contentIt->second || !std::holds_alternative<JSONValue::Array>(contentIt->second->value)) {
+    if (contentIt == obj.end() || !contentIt->second) {
         return false;
     }
-    const auto& arr = std::get<JSONValue::Array>(contentIt->second->value);
-    for (const auto& item : arr) {
-        if (!item || !isContentItem(*item)) {
-            return false;
-        }
-    }
-    return true;
+    return isContentItem(*contentIt->second);
 }
 
 //------------------------------ JSON validators (for client-side raw JSON) ------------------------------
@@ -300,7 +294,19 @@ inline bool validateReadResourceResultJson(const JSONValue& v) {
         if (!p) {
             return false;
         }
-        if (!isContentItem(*p)) {
+        if (!std::holds_alternative<JSONValue::Object>(p->value)) {
+            return false;
+        }
+        const auto& item = std::get<JSONValue::Object>(p->value);
+        const bool isChunkText = isTextContentItem(*p);
+        const bool hasUri = isStringField(item, "uri");
+        const bool hasText = isStringField(item, "text");
+        const bool hasBlob = isStringField(item, "blob");
+        const bool isResourceContents =
+            hasUri &&
+            (hasText != hasBlob) &&
+            isOptionalStringField(item, "mimeType");
+        if (!isChunkText && !isResourceContents) {
             return false;
         }
     }
@@ -648,15 +654,19 @@ inline bool validateCreateMessageParamsJson(const JSONValue& v) {
         if (!m || !std::holds_alternative<JSONValue::Object>(m->value)) return false;
         const auto& mo = std::get<JSONValue::Object>(m->value);
         auto c = mo.find("content");
-            if (c != mo.end()) {
-                if (!c->second || !std::holds_alternative<JSONValue::Array>(c->second->value)) return false;
+        if (c != mo.end()) {
+            if (!c->second) return false;
+            if (std::holds_alternative<JSONValue::Array>(c->second->value)) {
                 const auto& carr = std::get<JSONValue::Array>(c->second->value);
                 for (const auto& ci : carr) {
                     if (!ci) return false;
                     if (!isContentItem(*ci)) return false;
                 }
+            } else if (!isContentItem(*c->second)) {
+                return false;
             }
         }
+    }
     // modelPreferences/systemPrompt/includeContext are optional, any JSON types accepted
     return true;
 }
@@ -666,11 +676,15 @@ inline bool validateCreateMessageResultJson(const JSONValue& v) {
     const auto& o = std::get<JSONValue::Object>(v.value);
     auto mdl = o.find("model"); if (mdl == o.end() || !mdl->second || !std::holds_alternative<std::string>(mdl->second->value)) return false;
     auto role = o.find("role"); if (role == o.end() || !role->second || !std::holds_alternative<std::string>(role->second->value)) return false;
-    auto cont = o.find("content"); if (cont == o.end() || !cont->second || !std::holds_alternative<JSONValue::Array>(cont->second->value)) return false;
-    const auto& arr = std::get<JSONValue::Array>(cont->second->value);
-    for (const auto& ci : arr) {
-        if (!ci) return false;
-        if (!isContentItem(*ci)) return false;
+    auto cont = o.find("content"); if (cont == o.end() || !cont->second) return false;
+    if (std::holds_alternative<JSONValue::Array>(cont->second->value)) {
+        const auto& arr = std::get<JSONValue::Array>(cont->second->value);
+        for (const auto& ci : arr) {
+            if (!ci) return false;
+            if (!isContentItem(*ci)) return false;
+        }
+    } else if (!isContentItem(*cont->second)) {
+        return false;
     }
     // stopReason optional
     return true;
@@ -682,7 +696,24 @@ inline bool validateCallToolResult(const CallToolResult& r) {
 }
 
 inline bool validateReadResourceResult(const ReadResourceResult& r) {
-    return isContentArray(r.contents);
+    for (const auto& item : r.contents) {
+        if (!std::holds_alternative<JSONValue::Object>(item.value)) {
+            return false;
+        }
+        const auto& objectValue = std::get<JSONValue::Object>(item.value);
+        const bool isChunkText = isTextContentItem(item);
+        const bool hasUri = isStringField(objectValue, "uri");
+        const bool hasText = isStringField(objectValue, "text");
+        const bool hasBlob = isStringField(objectValue, "blob");
+        const bool isResourceContents =
+            hasUri &&
+            (hasText != hasBlob) &&
+            isOptionalStringField(objectValue, "mimeType");
+        if (!isChunkText && !isResourceContents) {
+            return false;
+        }
+    }
+    return true;
 }
 
 inline bool validateGetPromptResult(const GetPromptResult& r) {

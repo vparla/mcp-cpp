@@ -84,16 +84,25 @@ TEST(ContentParity, TypedBuildersAndValidatorsAcceptRichContent) {
     callToolResult["_meta"] = std::make_shared<JSONValue>(meta);
     EXPECT_TRUE(validation::validateCallToolResultJson(JSONValue{callToolResult}));
 
-    JSONValue::Object resourceResult;
-    resourceResult["contents"] = std::make_shared<JSONValue>(contentArray);
-    EXPECT_TRUE(validation::validateReadResourceResultJson(JSONValue{resourceResult}));
+    JSONValue::Array chunkedContents;
+    chunkedContents.push_back(std::make_shared<JSONValue>(text));
+    JSONValue::Object chunkedResourceResult;
+    chunkedResourceResult["contents"] = std::make_shared<JSONValue>(chunkedContents);
+    EXPECT_TRUE(validation::validateReadResourceResultJson(JSONValue{chunkedResourceResult}));
+
+    JSONValue::Object rawResourceContent;
+    rawResourceContent["uri"] = std::make_shared<JSONValue>(std::string("test://static-text"));
+    rawResourceContent["mimeType"] = std::make_shared<JSONValue>(std::string("text/plain"));
+    rawResourceContent["text"] = std::make_shared<JSONValue>(std::string("raw resource text"));
+    JSONValue::Array rawContents;
+    rawContents.push_back(std::make_shared<JSONValue>(rawResourceContent));
+    JSONValue::Object rawResourceResult;
+    rawResourceResult["contents"] = std::make_shared<JSONValue>(rawContents);
+    EXPECT_TRUE(validation::validateReadResourceResultJson(JSONValue{rawResourceResult}));
 
     JSONValue::Object promptMessage;
     promptMessage["role"] = std::make_shared<JSONValue>(std::string("assistant"));
-    JSONValue::Array promptContent;
-    promptContent.push_back(std::make_shared<JSONValue>(text));
-    promptContent.push_back(std::make_shared<JSONValue>(image));
-    promptMessage["content"] = std::make_shared<JSONValue>(promptContent);
+    promptMessage["content"] = std::make_shared<JSONValue>(text);
 
     JSONValue::Object promptResult;
     promptResult["description"] = std::make_shared<JSONValue>(std::string("rich prompt"));
