@@ -79,6 +79,9 @@ Thumbs.db
 # IDE/editor metadata
 # -------------------
 .vscode/
+!.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
 *.user
 *.vcxproj.user

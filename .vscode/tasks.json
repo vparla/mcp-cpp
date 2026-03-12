@@ -1,0 +1,103 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "docker: build test image",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "buildx",
+        "build",
+        "-f",
+        "Dockerfile.demo",
+        "--target",
+        "test",
+        "--progress=plain",
+        "--pull",
+        "--load",
+        "-t",
+        "mcp-cpp-test",
+        "."
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "windows": {
+        "command": "wsl",
+        "args": [
+          "-d",
+          "Ubuntu",
+          "--",
+          "bash",
+          "-lc",
+          "cd \"$(wslpath '${workspaceFolder}')\" && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+        ]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "docker: run architecture gate",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=1g",
+        "--entrypoint",
+        "bash",
+        "mcp-cpp-test",
+        "-lc",
+        "cp -a /src/build /tmp/build && ctest --test-dir /tmp/build -R '^Architecture' -VV --output-on-failure"
+      ],
+      "dependsOn": "docker: build test image",
+      "windows": {
+        "command": "wsl",
+        "args": [
+          "-d",
+          "Ubuntu",
+          "--",
+          "bash",
+          "-lc",
+          "docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint bash mcp-cpp-test -lc 'cp -a /src/build /tmp/build && ctest --test-dir /tmp/build -R \"^Architecture\" -VV --output-on-failure'"
+        ]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "docker: run full ctest gate",
+      "type": "shell",
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--read-only",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=1g",
+        "--entrypoint",
+        "bash",
+        "mcp-cpp-test",
+        "-lc",
+        "cp -a /src/build /tmp/build && ctest --test-dir /tmp/build -VV --output-on-failure"
+      ],
+      "dependsOn": "docker: build test image",
+      "windows": {
+        "command": "wsl",
+        "args": [
+          "-d",
+          "Ubuntu",
+          "--",
+          "bash",
+          "-lc",
+          "docker run --rm --network none --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --entrypoint bash mcp-cpp-test -lc 'cp -a /src/build /tmp/build && ctest --test-dir /tmp/build -VV --output-on-failure'"
+        ]
+      },
+      "problemMatcher": []
+    }
+  ]
+}
