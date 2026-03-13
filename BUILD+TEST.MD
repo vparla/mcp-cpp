@@ -22,7 +22,7 @@ This project uses a Docker-first workflow for reproducible builds and tests acro
 
 - Docker Engine with Buildx
 - Windows only: WSL2 Ubuntu installed and Docker Desktop or Docker Engine in WSL
-- Project path on Windows: `C:\Work\mcp-cpp` (mounted at `/mnt/c/Work/mcp-cpp` inside WSL)
+- Project path on Windows: `C:\<path-to-repo>\mcp-cpp` (mounted at `/mnt/c/<path-to-repo>/mcp-cpp` inside WSL)
 
 Verify Docker:
 ```bash
@@ -42,7 +42,7 @@ docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --l
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 ### Full suite (unit/integration + HTTPS e2e)
@@ -62,7 +62,34 @@ chmod +x scripts/*.sh
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && chmod +x scripts/*.sh && ./scripts/ci_all.sh"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && chmod +x scripts/*.sh && ./scripts/ci_all.sh"
+```
+
+### Official MCP server conformance
+
+Run the official MCP server conformance suite against the repo's Dockerized streamable HTTP conformance server.
+The runner source is explicit and configurable through `MCP_CONFORMANCE_RUNNER_SOURCE`.
+
+- Linux/macOS with npm package source:
+```bash
+cd /path/to/mcp-cpp
+MCP_CONFORMANCE_RUNNER_SOURCE='@modelcontextprotocol/conformance@0.1.15' ./scripts/run_server_conformance.sh
+```
+
+- Linux/macOS with a local tarball already present in the repo root:
+```bash
+cd /path/to/mcp-cpp
+MCP_CONFORMANCE_RUNNER_SOURCE='./modelcontextprotocol-conformance-0.1.15.tgz' ./scripts/run_server_conformance.sh
+```
+
+- Windows (PowerShell via WSL2 Ubuntu) with npm package source:
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && MCP_CONFORMANCE_RUNNER_SOURCE='@modelcontextprotocol/conformance@0.1.15' ./scripts/run_server_conformance.sh"
+```
+
+- Windows (PowerShell via WSL2 Ubuntu) with a local tarball already present in the repo root:
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && MCP_CONFORMANCE_RUNNER_SOURCE='./modelcontextprotocol-conformance-0.1.15.tgz' ./scripts/run_server_conformance.sh"
 ```
 
 Notes:
@@ -83,7 +110,7 @@ Use a Docker-first workflow to capture backtraces without installing native tool
 - Build the compiled image (examples + tests)
   - Windows (PowerShell via WSL2 Ubuntu):
   ```powershell
-  wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
   ```
 
 - Create a debug image with GDB preinstalled
@@ -131,7 +158,7 @@ Notes:
   - What it does: rebuilds `mcp-cpp-build`, layers `mcp-cpp-build-dbg` with GDB, starts the HTTP server, then runs the client under GDB and prints a backtrace on faults.
   - Usage (WSL PowerShell):
   ```powershell
-  wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && chmod +x scripts/_gdb_http_debug.sh && ./scripts/_gdb_http_debug.sh --no-cache --url http://127.0.0.1:9443"
+  wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && chmod +x scripts/_gdb_http_debug.sh && ./scripts/_gdb_http_debug.sh --no-cache --url http://127.0.0.1:9443"
   ```
   - Options:
     - `--no-cache` forces fresh rebuilds of both images.
@@ -167,7 +194,7 @@ docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --l
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 ### Full rebuild (disable layer cache)
@@ -179,7 +206,7 @@ docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain
 
 - Windows (WSL):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 ### Build only (don’t run CTest yet)
@@ -191,7 +218,7 @@ docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --
 
 - Windows (WSL):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
 ```
 
 ### Run CTest inside the built container
@@ -210,7 +237,7 @@ wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src &&
 
 - Build the test image (includes examples + CTest):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 - Run the Bearer demo (401 → 200) on port 9443 with anchored regex and `-j1`:
@@ -310,7 +337,7 @@ docker buildx build --platform linux/amd64 -f Dockerfile.demo --target test --pr
 
 - Windows (WSL):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build --platform linux/amd64 -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build --platform linux/amd64 -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 ### Pass environment/options to tests
@@ -348,7 +375,7 @@ If you use Docker Desktop with Linux containers, you can run commands natively i
 
 - Full test run:
 ```powershell
-cd C:\Work\mcp-cpp
+cd C:\<path-to-repo>\mcp-cpp
 docker buildx build -f Dockerfile.demo --target test --progress=plain --pull --load -t mcp-cpp-test .
 ```
 
@@ -372,12 +399,12 @@ docker run --rm -t mcp-cpp-build bash -lc "cd /src && ctest --test-dir build -R 
 docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo .
 docker run --rm --name mcp-cpp-demo \
   -e MCP_STDIOTRANSPORT_TIMEOUT_MS=2000 \
-  --mount type=bind,src=C:\\Work\\mcp-cpp,dst=/work mcp-cpp-demo
+  --mount type=bind,src=C:\\<path-to-repo>\\mcp-cpp,dst=/work mcp-cpp-demo
 ```
 
 Notes:
 - If your Windows path contains spaces, wrap it in quotes: `src="C:\\Path With Spaces\\mcp-cpp"`.
-- On older Docker Desktop versions, you may use `-v C:\\Work\\mcp-cpp:/work` instead of `--mount`.
+- On older Docker Desktop versions, you may use `-v C:\\<path-to-repo>\\mcp-cpp:/work` instead of `--mount`.
 - For multi-arch images on Docker Desktop, set `--platform` as shown below.
 
 ### Publishing images to a registry (`--push`)
@@ -454,39 +481,39 @@ docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull \
 
 We write tests with GoogleTest, and CTest (from CMake) discovers and runs them inside the `--target test` Docker image (see `tests/CMakeLists.txt` and `Dockerfile.demo`). The list below summarizes each test; the sources live under `tests/`:
 
-- __InMemoryTransport.RequestResponseRoutes__ — basic request/response over in-memory transport. Validates request handling and result propagation. Source: [tests/test_inmemory_transport.cpp](c:/Work/mcp-cpp/tests/test_inmemory_transport.cpp)
-- __InMemoryTransport.ErrorWhenPeerDisconnected__ — sending a request after the peer disconnects yields an error. Source: [tests/test_inmemory_transport.cpp](c:/Work/mcp-cpp/tests/test_inmemory_transport.cpp)
-- __InMemoryTransport.NotificationRouting__ — notifications are delivered to the correct handler. Source: [tests/test_inmemory_transport.cpp](c:/Work/mcp-cpp/tests/test_inmemory_transport.cpp)
-- __InMemoryTransport.PendingRequestsFailOnClose__ — pending requests complete with error if the client closes. Source: [tests/test_inmemory_transport.cpp](c:/Work/mcp-cpp/tests/test_inmemory_transport.cpp)
-- __ServerResourceTemplates.ListRoundTrip__ — server registers resource templates and client lists them end-to-end. Source: [tests/test_resource_templates.cpp](c:/Work/mcp-cpp/tests/test_resource_templates.cpp)
-- __PromptsGet.ReturnsActualMessages__ — `prompts/get` returns actual `messages` content, not placeholders. Source: [tests/test_prompts_get.cpp](c:/Work/mcp-cpp/tests/test_prompts_get.cpp)
-- __ServerToolsInputSchema.ListIncludesProvidedSchema__ — validates Step 1 change: registering a tool with metadata (description + inputSchema) is reflected by `tools/list`. Source: [tests/test_tools_inputschema.cpp](c:/Work/mcp-cpp/tests/test_tools_inputschema.cpp)
-- __ClientPaging.ToolsListPaged__ — verifies paging for tools/list with cursor and limit. Source: [tests/test_client_paging.cpp](c:/Work/mcp-cpp/tests/test_client_paging.cpp)
-- __ClientPaging.ResourcesListPaged__ — verifies paging for resources/list. Source: [tests/test_client_paging.cpp](c:/Work/mcp-cpp/tests/test_client_paging.cpp)
-- __ClientPaging.ResourceTemplatesListPaged__ — verifies paging for resources/templates/list. Source: [tests/test_client_paging.cpp](c:/Work/mcp-cpp/tests/test_client_paging.cpp)
-- __ClientPaging.PromptsListPaged__ — verifies paging for prompts/list. Source: [tests/test_client_paging.cpp](c:/Work/mcp-cpp/tests/test_client_paging.cpp)
-- __ServerReadResource.ReturnsContents__ — server ReadResource returns contents array with expected shape. Source: [tests/test_read_resource.cpp](c:/Work/mcp-cpp/tests/test_read_resource.cpp)
-- __ServerSampling.HandlesCreateMessageRequest__ — server handles sampling/createMessage with a registered handler. Source: [tests/test_sampling_handler.cpp](c:/Work/mcp-cpp/tests/test_sampling_handler.cpp)
-- __ResourceSubscriptions.FiltersUpdatesByUri__ — server filters resources/updated notifications by subscribed URIs. Source: [tests/test_resource_subscriptions.cpp](c:/Work/mcp-cpp/tests/test_resource_subscriptions.cpp)
-- __ClientSubscribeUri.SubAndFilterByUri__ — client API per-URI subscription and filtered notifications. Source: [tests/test_client_subscribe_uri.cpp](c:/Work/mcp-cpp/tests/test_client_subscribe_uri.cpp)
-- __TransportDemo.Run__ — demo integration that exercises stdio, shared-memory, and HTTP transports; builds and runs the example server and client. Configurable via `MCP_STDIOTRANSPORT_TIMEOUT_MS`. Defined in [tests/CMakeLists.txt](c:/Work/mcp-cpp/tests/CMakeLists.txt) and script [scripts/run_demo.sh](c:/Work/mcp-cpp/scripts/run_demo.sh)
+- __InMemoryTransport.RequestResponseRoutes__ — basic request/response over in-memory transport. Validates request handling and result propagation. Source: [tests/test_inmemory_transport.cpp](./tests/test_inmemory_transport.cpp)
+- __InMemoryTransport.ErrorWhenPeerDisconnected__ — sending a request after the peer disconnects yields an error. Source: [tests/test_inmemory_transport.cpp](./tests/test_inmemory_transport.cpp)
+- __InMemoryTransport.NotificationRouting__ — notifications are delivered to the correct handler. Source: [tests/test_inmemory_transport.cpp](./tests/test_inmemory_transport.cpp)
+- __InMemoryTransport.PendingRequestsFailOnClose__ — pending requests complete with error if the client closes. Source: [tests/test_inmemory_transport.cpp](./tests/test_inmemory_transport.cpp)
+- __ServerResourceTemplates.ListRoundTrip__ — server registers resource templates and client lists them end-to-end. Source: [tests/test_resource_templates.cpp](./tests/test_resource_templates.cpp)
+- __PromptsGet.ReturnsActualMessages__ — `prompts/get` returns actual `messages` content, not placeholders. Source: [tests/test_prompts_get.cpp](./tests/test_prompts_get.cpp)
+- __ServerToolsInputSchema.ListIncludesProvidedSchema__ — validates Step 1 change: registering a tool with metadata (description + inputSchema) is reflected by `tools/list`. Source: [tests/test_tools_inputschema.cpp](./tests/test_tools_inputschema.cpp)
+- __ClientPaging.ToolsListPaged__ — verifies paging for tools/list with cursor and limit. Source: [tests/test_client_paging.cpp](./tests/test_client_paging.cpp)
+- __ClientPaging.ResourcesListPaged__ — verifies paging for resources/list. Source: [tests/test_client_paging.cpp](./tests/test_client_paging.cpp)
+- __ClientPaging.ResourceTemplatesListPaged__ — verifies paging for resources/templates/list. Source: [tests/test_client_paging.cpp](./tests/test_client_paging.cpp)
+- __ClientPaging.PromptsListPaged__ — verifies paging for prompts/list. Source: [tests/test_client_paging.cpp](./tests/test_client_paging.cpp)
+- __ServerReadResource.ReturnsContents__ — server ReadResource returns contents array with expected shape. Source: [tests/test_read_resource.cpp](./tests/test_read_resource.cpp)
+- __ServerSampling.HandlesCreateMessageRequest__ — server handles sampling/createMessage with a registered handler. Source: [tests/test_sampling_handler.cpp](./tests/test_sampling_handler.cpp)
+- __ResourceSubscriptions.FiltersUpdatesByUri__ — server filters resources/updated notifications by subscribed URIs. Source: [tests/test_resource_subscriptions.cpp](./tests/test_resource_subscriptions.cpp)
+- __ClientSubscribeUri.SubAndFilterByUri__ — client API per-URI subscription and filtered notifications. Source: [tests/test_client_subscribe_uri.cpp](./tests/test_client_subscribe_uri.cpp)
+- __TransportDemo.Run__ — demo integration that exercises stdio, shared-memory, and HTTP transports; builds and runs the example server and client. Configurable via `MCP_STDIOTRANSPORT_TIMEOUT_MS`. Defined in [tests/CMakeLists.txt](./tests/CMakeLists.txt) and script [scripts/run_demo.sh](./scripts/run_demo.sh)
 
-- __StdioHardening.IdleReadTimeout__ — verifies idle read timeout closes transport when no bytes are received for the configured duration. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
-- __StdioHardening.WriteQueueOverflow__ — small write queue with frequent keepalives triggers overflow; transport emits error and closes. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
-- __StdioHardening.WriteTimeout__ — non-blocking writes stall with no reader; write timeout closes transport. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
-- __StdioHardening.BadContentLength__ — oversized Content-Length header is rejected; server terminates. Script: [scripts/test_stdio_hardening.sh](c:/Work/mcp-cpp/scripts/test_stdio_hardening.sh)
+- __StdioHardening.IdleReadTimeout__ — verifies idle read timeout closes transport when no bytes are received for the configured duration. Script: [scripts/test_stdio_hardening.sh](./scripts/test_stdio_hardening.sh)
+- __StdioHardening.WriteQueueOverflow__ — small write queue with frequent keepalives triggers overflow; transport emits error and closes. Script: [scripts/test_stdio_hardening.sh](./scripts/test_stdio_hardening.sh)
+- __StdioHardening.WriteTimeout__ — non-blocking writes stall with no reader; write timeout closes transport. Script: [scripts/test_stdio_hardening.sh](./scripts/test_stdio_hardening.sh)
+- __StdioHardening.BadContentLength__ — oversized Content-Length header is rejected; server terminates. Script: [scripts/test_stdio_hardening.sh](./scripts/test_stdio_hardening.sh)
 
 Run the full suite with no cache (WSL):
 
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --no-cache --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 Run a single test (advanced, WSL):
 
 ```powershell
 # Build the compiled image without running ctest automatically
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target build --progress=plain --pull --load -t mcp-cpp-build ."
 
 # Run just one test by name (regex), here the Step 1 test
 wsl -d Ubuntu -- bash -lc "docker run --rm -t mcp-cpp-build bash -lc 'cd /src && ctest --test-dir build -R ServerToolsInputSchema.ListIncludesProvidedSchema --output-on-failure'"
@@ -536,7 +563,7 @@ docker buildx build \
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --build-arg MCP_STDIOTRANSPORT_TIMEOUT_MS=200 --progress=plain --pull --load -t mcp-cpp-test ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target test --build-arg MCP_STDIOTRANSPORT_TIMEOUT_MS=200 --progress=plain --pull --load -t mcp-cpp-test ."
 ```
 
 ## Build and run the demo
@@ -562,8 +589,8 @@ docker run --rm --name mcp-cpp-demo \
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
-wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo -e MCP_STDIOTRANSPORT_TIMEOUT_MS=2000 --mount type=bind,src=/mnt/c/Work/mcp-cpp,dst=/work mcp-cpp-demo"
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build -f Dockerfile.demo --target demo --progress=plain --pull --load -t mcp-cpp-demo ."
+wsl -d Ubuntu -- bash -lc "docker run --rm --name mcp-cpp-demo -e MCP_STDIOTRANSPORT_TIMEOUT_MS=2000 --mount type=bind,src=/mnt/c/<path-to-repo>/mcp-cpp,dst=/work mcp-cpp-demo"
 ```
 
 To enable the Shared-memory transport demo on Windows (WSL), add the mqueue mount:
@@ -609,7 +636,7 @@ docker buildx build --target artifacts --output type=local,dest=./out .
 
 - Windows (PowerShell via WSL2 Ubuntu):
 ```powershell
-wsl -d Ubuntu -- bash -lc "cd /mnt/c/Work/mcp-cpp && docker buildx build --target artifacts --output type=local,dest=/mnt/c/Work/mcp-cpp/out ."
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && docker buildx build --target artifacts --output type=local,dest=/mnt/c/<path-to-repo>/mcp-cpp/out ."
 ```
 
 Artifacts appear under `out/`:

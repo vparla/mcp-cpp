@@ -51,6 +51,25 @@ inline JSONValue makeObjectSchema(const JSONValue::Object& properties = JSONValu
     return JSONValue{schema};
 }
 
+inline JSONValue makeEnumArray(const std::vector<std::string>& values) {
+    JSONValue::Array array;
+    for (const auto& value : values) {
+        array.push_back(std::make_shared<JSONValue>(value));
+    }
+    return JSONValue{array};
+}
+
+inline JSONValue makeTitledEnumOptions(const std::vector<std::pair<std::string, std::string>>& values) {
+    JSONValue::Array options;
+    for (const auto& [value, title] : values) {
+        JSONValue::Object item;
+        item["const"] = std::make_shared<JSONValue>(value);
+        item["title"] = std::make_shared<JSONValue>(title);
+        options.push_back(std::make_shared<JSONValue>(item));
+    }
+    return JSONValue{options};
+}
+
 inline JSONValue makePromptArguments(const std::vector<std::tuple<std::string, std::string, bool>>& args) {
     JSONValue::Array values;
     for (const auto& [name, description, required] : args) {
@@ -509,6 +528,140 @@ inline void RegisterConformanceServerProfile(Server& server) {
                     responseText += std::string(" received");
                 }
                 result.content.push_back(typed::makeText(responseText));
+            } catch (const std::exception& e) {
+                result.isError = true;
+                result.content.push_back(typed::makeText(std::string("Elicitation failed: ") + e.what()));
+            }
+            return result;
+        });
+    });
+
+    Tool elicitationDefaultsTool;
+    elicitationDefaultsTool.name = "test_elicitation_sep1034_defaults";
+    elicitationDefaultsTool.description = "Request elicitation with primitive default values for SEP-1034 conformance.";
+    elicitationDefaultsTool.inputSchema = detail::makeObjectSchema();
+    server.RegisterTool(elicitationDefaultsTool, [&server](const JSONValue&, std::stop_token st) -> std::future<ToolResult> {
+        return std::async(std::launch::async, [&server, st]() {
+            ToolResult result;
+            if (st.stop_requested()) {
+                result.isError = true;
+                result.content.push_back(typed::makeText("Elicitation defaults test was cancelled."));
+                return result;
+            }
+
+            JSONValue::Object properties;
+
+            JSONValue::Object nameSchema;
+            nameSchema["type"] = std::make_shared<JSONValue>(std::string("string"));
+            nameSchema["default"] = std::make_shared<JSONValue>(std::string("John Doe"));
+            properties["name"] = std::make_shared<JSONValue>(nameSchema);
+
+            JSONValue::Object ageSchema;
+            ageSchema["type"] = std::make_shared<JSONValue>(std::string("integer"));
+            ageSchema["default"] = std::make_shared<JSONValue>(static_cast<int64_t>(30));
+            properties["age"] = std::make_shared<JSONValue>(ageSchema);
+
+            JSONValue::Object scoreSchema;
+            scoreSchema["type"] = std::make_shared<JSONValue>(std::string("number"));
+            scoreSchema["default"] = std::make_shared<JSONValue>(95.5);
+            properties["score"] = std::make_shared<JSONValue>(scoreSchema);
+
+            JSONValue::Object statusSchema;
+            statusSchema["type"] = std::make_shared<JSONValue>(std::string("string"));
+            statusSchema["enum"] = std::make_shared<JSONValue>(
+                detail::makeEnumArray({"active", "inactive", "pending"}));
+            statusSchema["default"] = std::make_shared<JSONValue>(std::string("active"));
+            properties["status"] = std::make_shared<JSONValue>(statusSchema);
+
+            JSONValue::Object verifiedSchema;
+            verifiedSchema["type"] = std::make_shared<JSONValue>(std::string("boolean"));
+            verifiedSchema["default"] = std::make_shared<JSONValue>(true);
+            properties["verified"] = std::make_shared<JSONValue>(verifiedSchema);
+
+            ElicitationRequest request;
+            request.message = "Test client default value handling - please accept with defaults";
+            request.requestedSchema = detail::makeObjectSchema(properties);
+
+            try {
+                const ElicitationResult elicitationResult = server.RequestElicitation(request).get();
+                result.content.push_back(typed::makeText(
+                    std::string("Elicitation completed: action=") + elicitationResult.action +
+                    std::string(", content=") + (elicitationResult.content.has_value() ? "present" : "missing")));
+            } catch (const std::exception& e) {
+                result.isError = true;
+                result.content.push_back(typed::makeText(std::string("Elicitation failed: ") + e.what()));
+            }
+            return result;
+        });
+    });
+
+    Tool elicitationEnumsTool;
+    elicitationEnumsTool.name = "test_elicitation_sep1330_enums";
+    elicitationEnumsTool.description = "Request elicitation using SEP-1330 enum schema variants.";
+    elicitationEnumsTool.inputSchema = detail::makeObjectSchema();
+    server.RegisterTool(elicitationEnumsTool, [&server](const JSONValue&, std::stop_token st) -> std::future<ToolResult> {
+        return std::async(std::launch::async, [&server, st]() {
+            ToolResult result;
+            if (st.stop_requested()) {
+                result.isError = true;
+                result.content.push_back(typed::makeText("Elicitation enum test was cancelled."));
+                return result;
+            }
+
+            JSONValue::Object properties;
+
+            JSONValue::Object untitledSingle;
+            untitledSingle["type"] = std::make_shared<JSONValue>(std::string("string"));
+            untitledSingle["enum"] = std::make_shared<JSONValue>(
+                detail::makeEnumArray({"option1", "option2", "option3"}));
+            properties["untitledSingle"] = std::make_shared<JSONValue>(untitledSingle);
+
+            JSONValue::Object titledSingle;
+            titledSingle["type"] = std::make_shared<JSONValue>(std::string("string"));
+            titledSingle["oneOf"] = std::make_shared<JSONValue>(detail::makeTitledEnumOptions({
+                {"value1", "First Option"},
+                {"value2", "Second Option"},
+                {"value3", "Third Option"},
+            }));
+            properties["titledSingle"] = std::make_shared<JSONValue>(titledSingle);
+
+            JSONValue::Object legacyEnum;
+            legacyEnum["type"] = std::make_shared<JSONValue>(std::string("string"));
+            legacyEnum["enum"] = std::make_shared<JSONValue>(
+                detail::makeEnumArray({"opt1", "opt2", "opt3"}));
+            legacyEnum["enumNames"] = std::make_shared<JSONValue>(
+                detail::makeEnumArray({"Option One", "Option Two", "Option Three"}));
+            properties["legacyEnum"] = std::make_shared<JSONValue>(legacyEnum);
+
+            JSONValue::Object untitledMultiItems;
+            untitledMultiItems["type"] = std::make_shared<JSONValue>(std::string("string"));
+            untitledMultiItems["enum"] = std::make_shared<JSONValue>(
+                detail::makeEnumArray({"option1", "option2", "option3"}));
+            JSONValue::Object untitledMulti;
+            untitledMulti["type"] = std::make_shared<JSONValue>(std::string("array"));
+            untitledMulti["items"] = std::make_shared<JSONValue>(untitledMultiItems);
+            properties["untitledMulti"] = std::make_shared<JSONValue>(untitledMulti);
+
+            JSONValue::Object titledMultiItems;
+            titledMultiItems["anyOf"] = std::make_shared<JSONValue>(detail::makeTitledEnumOptions({
+                {"value1", "First Choice"},
+                {"value2", "Second Choice"},
+                {"value3", "Third Choice"},
+            }));
+            JSONValue::Object titledMulti;
+            titledMulti["type"] = std::make_shared<JSONValue>(std::string("array"));
+            titledMulti["items"] = std::make_shared<JSONValue>(titledMultiItems);
+            properties["titledMulti"] = std::make_shared<JSONValue>(titledMulti);
+
+            ElicitationRequest request;
+            request.message = "Please respond to the enum schema variants.";
+            request.requestedSchema = detail::makeObjectSchema(properties);
+
+            try {
+                const ElicitationResult elicitationResult = server.RequestElicitation(request).get();
+                result.content.push_back(typed::makeText(
+                    std::string("Elicitation completed: action=") + elicitationResult.action +
+                    std::string(", content=") + (elicitationResult.content.has_value() ? "present" : "missing")));
             } catch (const std::exception& e) {
                 result.isError = true;
                 result.content.push_back(typed::makeText(std::string("Elicitation failed: ") + e.what()));

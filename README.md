@@ -210,6 +210,36 @@ See `ServerSampling.HandlesCreateMessageRequest` in `tests/test_sampling_handler
 
 Tests use GoogleTest via CMake FetchContent (build-time only). See [BUILD+TEST.MD](./BUILD+TEST.MD#run-unit-tests-googletest-inside-docker) for the Docker/WSL2 flow.
 
+## Conformance
+
+The repo includes a Dockerized MCP conformance server fixture plus an official server-conformance runner script:
+
+- Fixture: [examples/conformance_server/main.cpp](./examples/conformance_server/main.cpp)
+- Shared profile: [src/mcp/ConformanceServerSupport.h](./src/mcp/ConformanceServerSupport.h)
+- Runner: [scripts/run_server_conformance.sh](./scripts/run_server_conformance.sh)
+
+The conformance runner accepts an explicit official package source via `MCP_CONFORMANCE_RUNNER_SOURCE`.
+
+- Linux/macOS with npm package source:
+```bash
+MCP_CONFORMANCE_RUNNER_SOURCE='@modelcontextprotocol/conformance@0.1.15' ./scripts/run_server_conformance.sh
+```
+
+- Linux/macOS with a local tarball already present in the repo root:
+```bash
+MCP_CONFORMANCE_RUNNER_SOURCE='./modelcontextprotocol-conformance-0.1.15.tgz' ./scripts/run_server_conformance.sh
+```
+
+- Windows (PowerShell via WSL) with npm package source:
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && MCP_CONFORMANCE_RUNNER_SOURCE='@modelcontextprotocol/conformance@0.1.15' ./scripts/run_server_conformance.sh"
+```
+
+- Windows (PowerShell via WSL) with a local tarball already present in the repo root:
+```powershell
+wsl -d Ubuntu -- bash -lc "cd /mnt/c/<path-to-repo>/mcp-cpp && MCP_CONFORMANCE_RUNNER_SOURCE='./modelcontextprotocol-conformance-0.1.15.tgz' ./scripts/run_server_conformance.sh"
+```
+
 ## Docker Demo
 
 Build and run the client/server demo using stdio transport (WSL2 PowerShell example below):

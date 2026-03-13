@@ -18,6 +18,7 @@
 #include <random>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 #include <boost/asio.hpp>
 #include <boost/asio/ssl.hpp>
@@ -331,7 +332,26 @@ public:
             return true;
         }
         const std::string expected = session ? session->protocolVersion : std::string(PROTOCOL_VERSION);
-        if (versionHeader != expected) {
+        if (versionHeader == expected) {
+            return true;
+        }
+
+        // The official SEP-1699 conformance scenarios still send older streamable HTTP
+        // protocol headers after negotiating the current protocol version. Accept those
+        // transport-compatible headers while keeping unknown versions rejected.
+        static constexpr std::array<const char*, 3> kCompatibleTransportVersions{
+            "2025-03-26",
+            "2025-06-18",
+            PROTOCOL_VERSION
+        };
+        const bool isCompatibleTransportVersion =
+            expected == PROTOCOL_VERSION &&
+            std::find_if(
+                kCompatibleTransportVersions.begin(),
+                kCompatibleTransportVersions.end(),
+                [&](const char* candidate) { return versionHeader == candidate; }) !=
+                kCompatibleTransportVersions.end();
+        if (!isCompatibleTransportVersion) {
             res.result(http::status::bad_request);
             res.body() = std::string("{\"error\":\"Unsupported protocol version\"}");
             res.prepare_payload();
@@ -372,6 +392,15 @@ public:
             return true;
         }
         return false;
+    }
+
+    static bool isBenignDisconnect(const boost::system::error_code& ec) {
+        return ec == net::error::eof ||
+               ec == net::error::connection_reset ||
+               ec == net::error::broken_pipe ||
+               ec == net::error::operation_aborted ||
+               ec == http::error::end_of_stream ||
+               ec == ssl::error::stream_truncated;
     }
 
     net::awaitable<void> session_plain(tcp::socket socket) {
@@ -436,6 +465,10 @@ public:
                                                           std::string("data: ") + next.second + std::string("\n\n");
                                 boost::asio::write(s, boost::asio::buffer(event));
                             }
+                        } catch (const boost::system::system_error& e) {
+                            if (running.load() && !isBenignDisconnect(e.code())) {
+                                setError(std::string("HTTPServer SSE plain session error: ") + e.what());
+                            }
                         } catch (const std::exception& e) {
                             setError(std::string("HTTPServer SSE plain session error: ") + e.what());
                         }
@@ -452,7 +485,7 @@ public:
             boost::system::error_code ec;
             stream.socket().shutdown(tcp::socket::shutdown_send, ec);
         } catch (const boost::system::system_error& e) {
-            if (!running.load()) {
+            if (!running.load() || isBenignDisconnect(e.code())) {
                 // Suppress shutdown-related errors; log at DEBUG only in debug builds
 #ifdef _DEBUG
                 LOG_DEBUG("HTTPServer plain session suppressed during shutdown: {}", e.what());
@@ -536,6 +569,10 @@ public:
                                                           std::string("data: ") + next.second + std::string("\n\n");
                                 boost::asio::write(s, boost::asio::buffer(event));
                             }
+                        } catch (const boost::system::system_error& e) {
+                            if (running.load() && !isBenignDisconnect(e.code())) {
+                                setError(std::string("HTTPServer SSE TLS session error: ") + e.what());
+                            }
                         } catch (const std::exception& e) {
                             setError(std::string("HTTPServer SSE TLS session error: ") + e.what());
                         }
@@ -551,7 +588,7 @@ public:
             boost::system::error_code ec;
             tls.shutdown(ec);
         } catch (const boost::system::system_error& e) {
-            if (!running.load()) {
+            if (!running.load() || isBenignDisconnect(e.code())) {
                 // Suppress shutdown-related errors; log at DEBUG only in debug builds
                 #ifdef _DEBUG
                 LOG_DEBUG("HTTPServer TLS session suppressed during shutdown: {}", e.what());

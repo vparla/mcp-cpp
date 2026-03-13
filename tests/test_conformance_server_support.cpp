@@ -133,6 +133,8 @@ TEST(ConformanceServerSupport, RegistersExpectedSurface) {
     EXPECT_TRUE(hasTool("test_simple_text"));
     EXPECT_TRUE(hasTool("test_sampling"));
     EXPECT_TRUE(hasTool("test_elicitation"));
+    EXPECT_TRUE(hasTool("test_elicitation_sep1034_defaults"));
+    EXPECT_TRUE(hasTool("test_elicitation_sep1330_enums"));
     EXPECT_TRUE(hasTool("json_schema_2020_12_tool"));
     EXPECT_TRUE(hasResource("test://static-text"));
     EXPECT_TRUE(hasResource("test://static-binary"));
@@ -302,6 +304,147 @@ TEST(ConformanceServerSupport, EndToEndLoggingProgressSamplingAndElicitation) {
     auto elicitationText = typed::firstText(elicitationResult);
     ASSERT_TRUE(elicitationText.has_value());
     EXPECT_NE(elicitationText->find("accept"), std::string::npos);
+
+    ASSERT_NO_THROW(client->Disconnect().get());
+    ASSERT_NO_THROW(server.Stop().get());
+}
+
+TEST(ConformanceServerSupport, EndToEndElicitationDefaultAndEnumSchemas) {
+    auto pair = InMemoryTransport::CreatePair();
+    auto clientTransport = std::move(pair.first);
+    auto serverTransport = std::move(pair.second);
+
+    Server server("Conformance Elicitation Schema Server");
+    server.SetValidationMode(validation::ValidationMode::Strict);
+    conformance::RegisterConformanceServerProfile(server);
+    ASSERT_NO_THROW(server.Start(std::move(serverTransport)).get());
+
+    ClientFactory factory;
+    Implementation clientInfo{"Conformance Client", "1.0.0"};
+    auto client = factory.CreateClient(clientInfo);
+    client->SetValidationMode(validation::ValidationMode::Strict);
+
+    std::vector<ElicitationRequest> requests;
+    std::mutex requestsMutex;
+    client->SetElicitationHandler([&](const ElicitationRequest& request) -> std::future<ElicitationResult> {
+        {
+            std::lock_guard<std::mutex> lock(requestsMutex);
+            requests.push_back(request);
+        }
+        return std::async(std::launch::deferred, []() {
+            ElicitationResult result;
+            result.action = "accept";
+            JSONValue::Object content;
+            content["ok"] = std::make_shared<JSONValue>(true);
+            result.content = JSONValue{content};
+            return result;
+        });
+    });
+
+    ASSERT_NO_THROW(client->Connect(std::move(clientTransport)).get());
+
+    ClientCapabilities caps;
+    caps.elicitation = ElicitationCapability{{"form"}};
+    auto initFuture = client->Initialize(clientInfo, caps);
+    ASSERT_EQ(initFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    (void)initFuture.get();
+
+    auto defaultFuture = typed::callTool(*client, "test_elicitation_sep1034_defaults", JSONValue{JSONValue::Object{}});
+    ASSERT_EQ(defaultFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_FALSE(defaultFuture.get().isError);
+
+    auto enumFuture = typed::callTool(*client, "test_elicitation_sep1330_enums", JSONValue{JSONValue::Object{}});
+    ASSERT_EQ(enumFuture.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_FALSE(enumFuture.get().isError);
+
+    ASSERT_TRUE(waitUntil([&]() {
+        std::lock_guard<std::mutex> lock(requestsMutex);
+        return requests.size() == 2u;
+    }));
+
+    auto getProperties = [](const JSONValue& schema) -> const JSONValue::Object& {
+        EXPECT_TRUE(std::holds_alternative<JSONValue::Object>(schema.value));
+        const auto& schemaObject = std::get<JSONValue::Object>(schema.value);
+        auto propertiesIt = schemaObject.find("properties");
+        EXPECT_NE(propertiesIt, schemaObject.end());
+        EXPECT_NE(propertiesIt->second, nullptr);
+        EXPECT_TRUE(std::holds_alternative<JSONValue::Object>(propertiesIt->second->value));
+        return std::get<JSONValue::Object>(propertiesIt->second->value);
+    };
+
+    ElicitationRequest defaultsRequest;
+    ElicitationRequest enumsRequest;
+    {
+        std::lock_guard<std::mutex> lock(requestsMutex);
+        ASSERT_EQ(requests.size(), 2u);
+        defaultsRequest = requests[0];
+        enumsRequest = requests[1];
+    }
+
+    const auto& defaultProperties = getProperties(defaultsRequest.requestedSchema);
+    ASSERT_TRUE(defaultProperties.contains("name"));
+    ASSERT_TRUE(defaultProperties.contains("age"));
+    ASSERT_TRUE(defaultProperties.contains("score"));
+    ASSERT_TRUE(defaultProperties.contains("status"));
+    ASSERT_TRUE(defaultProperties.contains("verified"));
+
+    const auto& nameSchema = std::get<JSONValue::Object>(defaultProperties.at("name")->value);
+    ASSERT_TRUE(nameSchema.contains("default"));
+    ASSERT_TRUE(std::holds_alternative<std::string>(nameSchema.at("default")->value));
+    EXPECT_EQ(std::get<std::string>(nameSchema.at("default")->value), "John Doe");
+
+    const auto& ageSchema = std::get<JSONValue::Object>(defaultProperties.at("age")->value);
+    ASSERT_TRUE(ageSchema.contains("default"));
+    ASSERT_TRUE(std::holds_alternative<int64_t>(ageSchema.at("default")->value));
+    EXPECT_EQ(std::get<int64_t>(ageSchema.at("default")->value), 30);
+
+    const auto& scoreSchema = std::get<JSONValue::Object>(defaultProperties.at("score")->value);
+    ASSERT_TRUE(scoreSchema.contains("default"));
+    ASSERT_TRUE(std::holds_alternative<double>(scoreSchema.at("default")->value));
+    EXPECT_DOUBLE_EQ(std::get<double>(scoreSchema.at("default")->value), 95.5);
+
+    const auto& statusSchema = std::get<JSONValue::Object>(defaultProperties.at("status")->value);
+    ASSERT_TRUE(statusSchema.contains("enum"));
+    ASSERT_TRUE(statusSchema.contains("default"));
+    ASSERT_TRUE(std::holds_alternative<std::string>(statusSchema.at("default")->value));
+    EXPECT_EQ(std::get<std::string>(statusSchema.at("default")->value), "active");
+
+    const auto& verifiedSchema = std::get<JSONValue::Object>(defaultProperties.at("verified")->value);
+    ASSERT_TRUE(verifiedSchema.contains("default"));
+    ASSERT_TRUE(std::holds_alternative<bool>(verifiedSchema.at("default")->value));
+    EXPECT_TRUE(std::get<bool>(verifiedSchema.at("default")->value));
+
+    const auto& enumProperties = getProperties(enumsRequest.requestedSchema);
+    ASSERT_TRUE(enumProperties.contains("untitledSingle"));
+    ASSERT_TRUE(enumProperties.contains("titledSingle"));
+    ASSERT_TRUE(enumProperties.contains("legacyEnum"));
+    ASSERT_TRUE(enumProperties.contains("untitledMulti"));
+    ASSERT_TRUE(enumProperties.contains("titledMulti"));
+
+    const auto& untitledSingle = std::get<JSONValue::Object>(enumProperties.at("untitledSingle")->value);
+    EXPECT_TRUE(untitledSingle.contains("enum"));
+    EXPECT_FALSE(untitledSingle.contains("oneOf"));
+    EXPECT_FALSE(untitledSingle.contains("enumNames"));
+
+    const auto& titledSingle = std::get<JSONValue::Object>(enumProperties.at("titledSingle")->value);
+    EXPECT_TRUE(titledSingle.contains("oneOf"));
+    EXPECT_FALSE(titledSingle.contains("enum"));
+
+    const auto& legacyEnum = std::get<JSONValue::Object>(enumProperties.at("legacyEnum")->value);
+    EXPECT_TRUE(legacyEnum.contains("enum"));
+    EXPECT_TRUE(legacyEnum.contains("enumNames"));
+
+    const auto& untitledMulti = std::get<JSONValue::Object>(enumProperties.at("untitledMulti")->value);
+    ASSERT_TRUE(untitledMulti.contains("items"));
+    const auto& untitledMultiItems = std::get<JSONValue::Object>(untitledMulti.at("items")->value);
+    EXPECT_TRUE(untitledMultiItems.contains("enum"));
+    EXPECT_FALSE(untitledMultiItems.contains("anyOf"));
+
+    const auto& titledMulti = std::get<JSONValue::Object>(enumProperties.at("titledMulti")->value);
+    ASSERT_TRUE(titledMulti.contains("items"));
+    const auto& titledMultiItems = std::get<JSONValue::Object>(titledMulti.at("items")->value);
+    EXPECT_TRUE(titledMultiItems.contains("anyOf"));
+    EXPECT_FALSE(titledMultiItems.contains("enum"));
 
     ASSERT_NO_THROW(client->Disconnect().get());
     ASSERT_NO_THROW(server.Stop().get());

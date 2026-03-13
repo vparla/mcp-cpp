@@ -56,6 +56,23 @@ jobs:
             --load \
             -t mcp-cpp-test .
 
+  server-conformance-ubuntu:
+    name: MCP server conformance (Ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run MCP server conformance suite in Docker
+        env:
+          MCP_CONFORMANCE_RUNNER_SOURCE: "@modelcontextprotocol/conformance@0.1.15"
+        run: |
+          chmod +x scripts/run_server_conformance.sh
+          ./scripts/run_server_conformance.sh
+
   docker-tests-windows:
     name: Docker-first tests (Windows)
     runs-on: windows-latest

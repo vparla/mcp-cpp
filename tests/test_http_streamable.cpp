@@ -407,6 +407,156 @@ TEST(HTTPStreamable, FactoryParsesStreamableEndpointAndStreamPaths) {
     ASSERT_NO_THROW(acceptor->Stop().get());
 }
 
+TEST(HTTPStreamable, ClientDisconnectBeforeRequestIsNotReportedAsTransportError) {
+    const auto port = findFreePort();
+
+    HTTPServer::Options serverOptions;
+    serverOptions.scheme = "http";
+    serverOptions.address = "127.0.0.1";
+    serverOptions.port = std::to_string(port);
+    serverOptions.endpointPath = "/mcp";
+
+    auto httpServer = std::make_unique<HTTPServer>(serverOptions);
+    std::atomic<int> errorCount{0};
+    std::mutex errorMutex;
+    std::vector<std::string> errors;
+    httpServer->SetErrorHandler([&](const std::string& error) {
+        ++errorCount;
+        std::lock_guard<std::mutex> lock(errorMutex);
+        errors.push_back(error);
+    });
+
+    Server server("EOF Suppression Server");
+    server.SetValidationMode(validation::ValidationMode::Strict);
+    ASSERT_NO_THROW(server.Start(std::unique_ptr<ITransport>(httpServer.release())).get());
+
+    {
+        boost::asio::io_context io;
+        boost::asio::ip::tcp::resolver resolver(io);
+        beast::tcp_stream stream(io);
+        auto results = resolver.resolve("127.0.0.1", std::to_string(port));
+        stream.connect(results);
+
+        boost::system::error_code ec;
+        stream.socket().shutdown(boost::asio::ip::tcp::socket::shutdown_both, ec);
+        stream.socket().close(ec);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(errorCount.load(), 0);
+
+    JSONRPCRequest initializeRequest;
+    initializeRequest.id = static_cast<int64_t>(1);
+    initializeRequest.method = Methods::Initialize;
+    initializeRequest.params = makeInitializeParams();
+    const auto initializeResponse = sendHttpRequest(
+        port,
+        http::verb::post,
+        "/mcp",
+        initializeRequest.Serialize(),
+        {{"Content-Type", "application/json"},
+         {"Accept", "application/json, text/event-stream"}});
+
+    ASSERT_EQ(initializeResponse.status, 200);
+    EXPECT_EQ(errorCount.load(), 0);
+    {
+        std::lock_guard<std::mutex> lock(errorMutex);
+        EXPECT_TRUE(errors.empty());
+    }
+
+    ASSERT_NO_THROW(server.Stop().get());
+}
+
+TEST(HTTPStreamable, CompatibleLegacyProtocolVersionHeadersAreAcceptedForConcurrentPostRequests) {
+    const auto port = findFreePort();
+
+    HTTPServer::Options serverOptions;
+    serverOptions.scheme = "http";
+    serverOptions.address = "127.0.0.1";
+    serverOptions.port = std::to_string(port);
+    serverOptions.endpointPath = "/mcp";
+
+    auto httpServer = std::make_unique<HTTPServer>(serverOptions);
+    Server server("Legacy Protocol Header Server");
+    server.SetValidationMode(validation::ValidationMode::Strict);
+
+    Tool tool;
+    tool.name = "dummy";
+    tool.description = "dummy";
+    tool.inputSchema = JSONValue{JSONValue::Object{}};
+    server.RegisterTool(tool, [](const JSONValue&, std::stop_token st) -> std::future<ToolResult> {
+        (void)st;
+        return std::async(std::launch::deferred, []() {
+            ToolResult result;
+            result.content.push_back(typed::makeText("ok"));
+            return result;
+        });
+    });
+
+    ASSERT_NO_THROW(server.Start(std::unique_ptr<ITransport>(httpServer.release())).get());
+
+    JSONRPCRequest initializeRequest;
+    initializeRequest.id = static_cast<int64_t>(1);
+    initializeRequest.method = Methods::Initialize;
+    initializeRequest.params = makeInitializeParams();
+    const auto initializeResponse = sendHttpRequest(
+        port,
+        http::verb::post,
+        "/mcp",
+        initializeRequest.Serialize(),
+        {{"Content-Type", "application/json"},
+         {"Accept", "application/json, text/event-stream"}});
+
+    ASSERT_EQ(initializeResponse.status, 200);
+    const auto sessionIt = initializeResponse.headers.find("Mcp-Session-Id");
+    ASSERT_NE(sessionIt, initializeResponse.headers.end());
+    ASSERT_FALSE(sessionIt->second.empty());
+
+    JSONRPCNotification initialized;
+    initialized.method = Methods::Initialized;
+    const auto initializedResponse = sendHttpRequest(
+        port,
+        http::verb::post,
+        "/mcp",
+        initialized.Serialize(),
+        {{"Content-Type", "application/json"},
+         {"Accept", "application/json, text/event-stream"},
+         {"Mcp-Session-Id", sessionIt->second},
+         {"MCP-Protocol-Version", PROTOCOL_VERSION}});
+    ASSERT_EQ(initializedResponse.status, 202);
+
+    auto makeToolsListRequest = [](int64_t requestId) {
+        JSONRPCRequest request;
+        request.id = requestId;
+        request.method = Methods::ListTools;
+        request.params = JSONValue{JSONValue::Object{}};
+        return request.Serialize();
+    };
+
+    std::vector<std::future<RawHttpResponse>> futures;
+    for (int64_t requestId = 1000; requestId < 1003; ++requestId) {
+        futures.push_back(std::async(std::launch::async, [&, requestId]() {
+            return sendHttpRequest(
+                port,
+                http::verb::post,
+                "/mcp",
+                makeToolsListRequest(requestId),
+                {{"Content-Type", "application/json"},
+                 {"Accept", "text/event-stream, application/json"},
+                 {"Mcp-Session-Id", sessionIt->second},
+                 {"MCP-Protocol-Version", "2025-03-26"}});
+        }));
+    }
+
+    for (auto& future : futures) {
+        ASSERT_EQ(future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+        const auto response = future.get();
+        EXPECT_EQ(response.status, 200);
+    }
+
+    ASSERT_NO_THROW(server.Stop().get());
+}
+
 TEST(HTTPStreamable, InitializedNotificationReturnsAcceptedOnEndpoint) {
     const auto port = findFreePort();
 
