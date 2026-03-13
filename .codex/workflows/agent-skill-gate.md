@@ -17,4 +17,5 @@ Codex should treat `agents.md` and `SKILLS.MD` as the canonical repo contract.
 4. Use Docker-only execution, WSL on Windows, and `bash` on Linux or macOS.
 5. Do not use bind mounts, named volumes, `docker cp`, `-o type=local`, or any Docker pattern that writes
    back to the host.
-6. If any failure appears, even if it looks unrelated, stop and fix it before continuing.
+6. Use sequential verification for auth, remotes, repo existence, branch tracking, commits, and pushes.
+7. If any failure appears, even if it looks unrelated, stop and fix it before continuing.

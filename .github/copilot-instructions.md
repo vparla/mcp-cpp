@@ -16,5 +16,7 @@ Start every task by reading `agents.md` and `SKILLS.MD`.
 - Use `.vscode/tasks.json` for repeatable editor-run Docker workflows.
 - Use Docker-first execution only. Windows commands go through WSL; Linux and macOS use `bash`.
 - Do not use bind mounts, named volumes, `docker cp`, or any Docker export that writes back to the host.
+- Use sequential verification for auth, remotes, repo creation, commits, and pushes. Verify active account, target
+  repo, remote URL, and branch tracking in order before diagnosing failures.
 - Treat every failure as blocking, even if it is not directly tied to the active request. Fix it immediately before
   continuing.

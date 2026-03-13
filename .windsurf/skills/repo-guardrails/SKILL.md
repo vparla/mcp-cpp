@@ -22,5 +22,6 @@ Read `agents.md` first, then `SKILLS.MD`.
 - Use the matching skill sections in `SKILLS.MD` before running commands or proposing edits.
 - Keep all build, test, and debug work inside Docker images built from repo context.
 - Do not mount the repo into containers and do not write artifacts back to the host.
+- Use sequential verification for auth, remotes, repo creation, commits, and pushes.
 - If any failure appears, fix it immediately before continuing, even when it looks tangential.
 - Use `bash` on Linux and macOS, and `wsl -d Ubuntu -- bash -lc "..."` on Windows.

@@ -76,6 +76,21 @@ Use whenever anything fails, including failures that look unrelated to the activ
 - Fix the failure immediately, rerun the failed gate, then rerun the next broader gate that depends on it.
 - Do not scope a failure away as "out of band" or "not part of this task."
 
+## Skill: sequential-verification
+
+Use for auth switching, remote changes, repo creation, branch tracking changes, commits, pushes, and permission or
+remote failures.
+
+- Make one stateful change at a time.
+- Do not parallelize a state-changing command with its verification command.
+- After each auth, remote, or repo-target change, verify immediately with direct checks such as
+  `gh api user --jq .login`, `gh auth status`, `git remote -v`, `git branch -vv`, and `gh repo view owner/repo`.
+- Keep service auth identity separate from commit author identity; verify both when the requested identity matters.
+- Do not blame remotes, permissions, or provider state until active account, target repo existence, remote URL, and
+  branch tracking have been verified in order.
+- If verification fails, stop, isolate the mismatch, fix the exact prerequisite, rerun the failed verification, and
+  only then continue.
+
 ## Skill: review-and-delivery
 
 Use when reviewing or finalizing work.
